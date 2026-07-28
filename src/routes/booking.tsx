@@ -1,13 +1,27 @@
 import { createFileRoute, useNavigate, Link } from "@tanstack/react-router";
 import { useState } from "react";
 import { toast } from "sonner";
-import { ArrowLeft, ArrowRight, Calendar as CalIcon, Check, Stethoscope, SmilePlus, Baby, Scan, Apple, ChevronLeft, ChevronRight } from "lucide-react";
+import {
+  ArrowLeft, ArrowRight, Calendar as CalIcon, Check, Stethoscope, SmilePlus, Baby, Scan,
+  Apple, ChevronLeft, ChevronRight, UserPlus, Loader2,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { useStore } from "@/lib/store";
-import { generateTimeSlots, formatDateLong } from "@/lib/medi-utils";
+import { useClinic } from "@/lib/api/clinic";
+import { useServices } from "@/lib/api/services";
+import { useActiveDoctors } from "@/lib/api/doctors";
+import {
+  crearCitaAnonima, useDoctorBusyBlocks, useDoctorNextSlots, type FreeSlot,
+} from "@/lib/api/appointments";
+import { crearPacienteAnonimo } from "@/lib/api/patients";
+import { usePatientByUserId } from "@/lib/api/patients";
+import { useAuth } from "@/lib/auth";
+import type { Doctor } from "@/lib/api/types";
+import {
+  generateTimeSlots, formatDate, formatDateLong, rangesOverlap, isoLocal, todayISO, horaActual,
+} from "@/lib/medi-utils";
 
 const iconMap: Record<string, React.ComponentType<{ className?: string }>> = {
   Stethoscope, SmilePlus, Baby, Scan, Apple,
@@ -16,54 +30,128 @@ const iconMap: Record<string, React.ComponentType<{ className?: string }>> = {
 export const Route = createFileRoute("/booking")({
   head: () => ({
     meta: [
-      { title: "Agendar Cita - MediOS" },
+      { title: "Agendar Cita - DoctorCita Clinica" },
       { name: "description", content: "Reserva tu cita medica en linea en pocos pasos." },
     ],
   }),
   component: BookingFlow,
 });
 
-const STEPS = ["Especialidad", "Doctor", "Fecha y hora", "Tus datos", "Confirmacion"];
+/** Los pasos se nombran, no se numeran: con sesion desaparece uno y los indices bailan. */
+type PasoId = "especialidad" | "doctor" | "fecha" | "datos" | "confirmacion";
+
+const ETIQUETAS: Record<PasoId, string> = {
+  especialidad: "Especialidad",
+  doctor: "Doctor",
+  fecha: "Fecha y hora",
+  datos: "Tus datos",
+  confirmacion: "Confirmacion",
+};
 
 function BookingFlow() {
   const navigate = useNavigate();
-  const { specialties, doctors, appointments, addAppointment, addPatient, patients } = useStore();
+  const { data: clinic } = useClinic();
+  const { data: specialties = [] } = useServices();
+  const { data: doctors = [] } = useActiveDoctors();
+
+  const { user, signUp } = useAuth();
+  const { data: miFicha, isLoading: cargandoFicha } = usePatientByUserId(user?.id);
+
   const [step, setStep] = useState(0);
+  const [enviando, setEnviando] = useState(false);
   const [specialtyId, setSpecialtyId] = useState<string>("");
   const [doctorId, setDoctorId] = useState<string>("");
   const [date, setDate] = useState<string>("");
   const [time, setTime] = useState<string>("");
   const [form, setForm] = useState({ name: "", phone: "", email: "", reason: "" });
+  const [quiereCuenta, setQuiereCuenta] = useState(false);
+  const [password, setPassword] = useState("");
+  const [cuentaCreada, setCuentaCreada] = useState(false);
   const [done, setDone] = useState(false);
 
   const specialty = specialties.find((s) => s.id === specialtyId);
   const doctor = doctors.find((d) => d.id === doctorId);
 
-  const next = () => setStep((s) => Math.min(s + 1, STEPS.length - 1));
-  const back = () => setStep((s) => Math.max(s - 1, 0));
+  // Con ficha propia ya sabemos quien eres: el paso de datos sobra
+  const saltarDatos = !!miFicha;
 
-  const confirm = () => {
-    let patient = patients.find((p) => p.phone === form.phone);
-    if (!patient) {
-      patient = addPatient({ name: form.name, phone: form.phone, email: form.email, birthDate: "1990-01-01" });
-    }
-    const apt = addAppointment({
-      patientId: patient.id,
-      doctorId,
-      specialtyId,
-      date,
-      time,
-      duration: specialty?.duration || 30,
-      reason: form.reason,
-    });
-    if (!apt) {
-      toast.error("Ese horario ya esta ocupado. Elige otro.");
-      setStep(2);
+  const pasos: PasoId[] = saltarDatos
+    ? ["especialidad", "doctor", "fecha", "confirmacion"]
+    : ["especialidad", "doctor", "fecha", "datos", "confirmacion"];
+
+  const pasoActual = pasos[step];
+
+  const next = () => setStep((s) => Math.min(s + 1, pasos.length - 1));
+  const back = () => setStep((s) => Math.max(s - 1, 0));
+  const volverAFecha = () => setStep(pasos.indexOf("fecha"));
+
+  const datosCompletos = !!form.name && !!form.phone && !!form.email
+    && (!quiereCuenta || password.length >= 6);
+
+  const confirm = async () => {
+    if (!clinic) {
+      toast.error("No se pudo cargar la clinica. Reintenta.");
       return;
     }
-    toast.success("Cita confirmada!");
-    setDone(true);
+    setEnviando(true);
+    try {
+      // Con sesion se reutiliza la ficha; sin ella se crea una.
+      // No se busca por telefono: `anon` no puede leer `patients` (RLS).
+      const patientId = miFicha?.id ?? (await crearPacienteAnonimo({
+        clinicId: clinic.id,
+        name: form.name,
+        phone: form.phone,
+        email: form.email,
+      }));
+
+      await crearCitaAnonima({
+        clinicId: clinic.id,
+        patientId,
+        doctorId,
+        serviceId: specialtyId,
+        date,
+        time,
+        duration: specialty?.duration || 30,
+        reason: form.reason,
+      });
+
+      // La cita ya esta guardada. La cuenta es opcional y va DESPUES a
+      // proposito: si el email ya existe, la reserva no se pierde.
+      if (quiereCuenta && !miFicha) {
+        const { error } = await signUp({
+          email: form.email,
+          password,
+          fullName: form.name,
+          // El trigger handle_new_user vincula esta ficha a la cuenta nueva
+          invite: { type: "patient", id: patientId },
+        });
+        if (error) {
+          toast.warning(`Tu cita quedo agendada, pero no se pudo crear la cuenta: ${error}`);
+        } else {
+          setCuentaCreada(true);
+        }
+      }
+
+      toast.success("Cita confirmada!");
+      setDone(true);
+    } catch (e) {
+      // El mensaje ya viene traducido por mensajeDeError (p. ej. solapamiento)
+      toast.error((e as Error).message);
+      volverAFecha();
+    } finally {
+      setEnviando(false);
+    }
   };
+
+  // Hasta saber si hay ficha no se sabe cuantos pasos tiene el flujo.
+  // Sin sesion la consulta esta desactivada, asi que esto no bloquea a nadie.
+  if (cargandoFicha) {
+    return (
+      <div className="grid min-h-screen place-items-center bg-accent/20">
+        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
 
   if (done) {
     return (
@@ -74,12 +162,17 @@ function BookingFlow() {
           </div>
           <h1 className="mt-6 text-2xl font-bold">Tu cita esta confirmada</h1>
           <p className="mt-2 text-sm text-muted-foreground">Te enviaremos un recordatorio 24h antes.</p>
+          {cuentaCreada && (
+            <p className="mt-3 rounded-xl bg-emerald-50 p-3 text-sm text-emerald-800">
+              Tu cuenta esta lista. Desde tu portal puedes ver, reagendar o cancelar tus citas.
+            </p>
+          )}
           <div className="mt-6 space-y-2 rounded-2xl bg-accent/40 p-4 text-left text-sm">
             <p><span className="text-muted-foreground">Doctor:</span> <span className="font-medium">{doctor?.name}</span></p>
             <p><span className="text-muted-foreground">Servicio:</span> <span className="font-medium">{specialty?.name}</span></p>
             <p><span className="text-muted-foreground">Fecha:</span> <span className="font-medium">{formatDateLong(date)}</span></p>
             <p><span className="text-muted-foreground">Hora:</span> <span className="font-medium">{time}</span></p>
-            <p><span className="text-muted-foreground">Paciente:</span> <span className="font-medium">{form.name}</span></p>
+            <p><span className="text-muted-foreground">Paciente:</span> <span className="font-medium">{miFicha?.name ?? form.name}</span></p>
           </div>
           <div className="mt-6 flex flex-col gap-2">
             <Button asChild><Link to="/">Volver al inicio</Link></Button>
@@ -97,7 +190,7 @@ function BookingFlow() {
           <Link to="/" className="flex items-center gap-2 text-sm font-medium text-muted-foreground hover:text-foreground">
             <ArrowLeft className="h-4 w-4" /> Volver
           </Link>
-          <span className="font-bold">MediOS</span>
+          <span className="font-bold">DoctorCita Clinica</span>
         </div>
       </header>
 
@@ -105,20 +198,25 @@ function BookingFlow() {
         {/* Stepper */}
         <div className="mb-8">
           <div className="flex items-center justify-between">
-            {STEPS.map((label, i) => (
-              <div key={label} className="flex flex-1 items-center">
+            {pasos.map((id, i) => (
+              <div key={id} className="flex flex-1 items-center last:flex-none">
                 <div className={`grid h-8 w-8 shrink-0 place-items-center rounded-full text-xs font-bold ${i <= step ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground"}`}>
                   {i < step ? <Check className="h-4 w-4" /> : i + 1}
                 </div>
-                {i < STEPS.length - 1 && <div className={`h-1 flex-1 ${i < step ? "bg-primary" : "bg-muted"}`} />}
+                {i < pasos.length - 1 && <div className={`h-1 flex-1 ${i < step ? "bg-primary" : "bg-muted"}`} />}
               </div>
             ))}
           </div>
-          <p className="mt-3 text-center text-sm font-medium">{STEPS[step]}</p>
+          <p className="mt-3 text-center text-sm font-medium">{ETIQUETAS[pasoActual]}</p>
+          {saltarDatos && (
+            <p className="mt-1 text-center text-xs text-muted-foreground">
+              Hola {miFicha?.name.split(" ")[0]}, usamos los datos de tu cuenta.
+            </p>
+          )}
         </div>
 
         <div className="rounded-3xl bg-card p-6 shadow-sm md:p-8">
-          {step === 0 && (
+          {pasoActual === "especialidad" && (
             <div className="grid gap-4 sm:grid-cols-2">
               {specialties.map((s) => {
                 const Icon = iconMap[s.icon] || Stethoscope;
@@ -139,33 +237,39 @@ function BookingFlow() {
             </div>
           )}
 
-          {step === 1 && (
+          {pasoActual === "doctor" && (
             <div className="grid gap-4">
-              {doctors.filter((d) => d.specialtyId === specialtyId && d.active).map((d) => (
-                <button
+              {doctors.filter((d) => d.serviceId === specialtyId).map((d) => (
+                <TarjetaDoctor
                   key={d.id}
-                  onClick={() => { setDoctorId(d.id); next(); }}
-                  className={`flex items-center gap-4 rounded-2xl border-2 p-4 text-left transition hover:border-primary hover:bg-accent/40 ${doctorId === d.id ? "border-primary bg-accent/40" : "border-border"}`}
-                >
-                  <img src={d.photo} alt={d.name} className="h-16 w-16 shrink-0 rounded-full object-cover" />
-                  <div className="min-w-0 flex-1">
-                    <h3 className="font-semibold">{d.name}</h3>
-                    <p className="text-sm text-muted-foreground">{specialty?.name}</p>
-                    <p className="mt-1 text-xs text-primary">Disponible {d.schedule.start} - {d.schedule.end}</p>
-                  </div>
-                </button>
+                  doctor={d}
+                  especialidad={specialty?.name ?? ""}
+                  duracion={specialty?.duration ?? 30}
+                  seleccionado={doctorId === d.id}
+                  onElegir={(hueco) => {
+                    setDoctorId(d.id);
+                    // Con un horario concreto se salta SOLO el paso de fecha.
+                    // Sin sesion, el siguiente sigue siendo "datos": saltar
+                    // hasta confirmar dejaria la cita sin nombre ni telefono.
+                    if (hueco) {
+                      setDate(hueco.date);
+                      setTime(hueco.time);
+                      setStep(pasos.indexOf("fecha") + 1);
+                    } else next();
+                  }}
+                />
               ))}
-              {doctors.filter((d) => d.specialtyId === specialtyId && d.active).length === 0 && (
+              {doctors.filter((d) => d.serviceId === specialtyId).length === 0 && (
                 <p className="text-center text-sm text-muted-foreground">No hay doctores disponibles para esta especialidad.</p>
               )}
             </div>
           )}
 
-          {step === 2 && doctor && (
-            <DateTimeStep doctor={doctor} appointments={appointments} duration={specialty?.duration || 30} date={date} time={time} onPick={(d, t) => { setDate(d); setTime(t); }} />
+          {pasoActual === "fecha" && doctor && (
+            <DateTimeStep doctor={doctor} duration={specialty?.duration || 30} date={date} time={time} onPick={(d, t) => { setDate(d); setTime(t); }} />
           )}
 
-          {step === 3 && (
+          {pasoActual === "datos" && (
             <div className="grid gap-4">
               <div>
                 <Label htmlFor="name">Nombre completo</Label>
@@ -183,10 +287,48 @@ function BookingFlow() {
                 <Label htmlFor="reason">Motivo de consulta</Label>
                 <Textarea id="reason" rows={3} value={form.reason} onChange={(e) => setForm({ ...form, reason: e.target.value })} />
               </div>
+
+              {/* Crear cuenta es opcional: agendar sin registrarse sigue funcionando */}
+              <div className="rounded-2xl border bg-accent/20 p-4">
+                <label className="flex cursor-pointer items-start gap-3">
+                  <input
+                    type="checkbox"
+                    checked={quiereCuenta}
+                    onChange={(e) => setQuiereCuenta(e.target.checked)}
+                    className="mt-1 h-4 w-4 shrink-0 accent-[oklch(0.55_0.20_258)]"
+                  />
+                  <span>
+                    <span className="flex items-center gap-2 text-sm font-medium">
+                      <UserPlus className="h-4 w-4 text-primary" /> Crear mi cuenta
+                    </span>
+                    <span className="mt-1 block text-xs text-muted-foreground">
+                      Para ver, reagendar o cancelar tus citas y consultar tus recibos.
+                      Si no la creas, tu cita queda agendada igual.
+                    </span>
+                  </span>
+                </label>
+
+                {quiereCuenta && (
+                  <div className="mt-4">
+                    <Label htmlFor="password">Contrasena</Label>
+                    <Input
+                      id="password"
+                      type="password"
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      autoComplete="new-password"
+                      placeholder="Minimo 6 caracteres"
+                    />
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      Entraras con <span className="font-medium">{form.email || "tu email"}</span>.
+                    </p>
+                  </div>
+                )}
+              </div>
             </div>
           )}
 
-          {step === 4 && (
+          {pasoActual === "confirmacion" && (
             <div className="space-y-4">
               <h3 className="text-lg font-semibold">Confirma tu cita</h3>
               <div className="space-y-3 rounded-2xl bg-accent/30 p-4 text-sm">
@@ -195,11 +337,25 @@ function BookingFlow() {
                 <Row label="Fecha" value={formatDateLong(date)} />
                 <Row label="Hora" value={time} />
                 <Row label="Duracion" value={`${specialty?.duration} min`} />
-                <Row label="Paciente" value={form.name} />
-                <Row label="Telefono" value={form.phone} />
-                <Row label="Motivo" value={form.reason || "—"} />
+                <Row label="Paciente" value={miFicha?.name ?? form.name} />
+                <Row label="Telefono" value={miFicha?.phone ?? form.phone} />
+                {!saltarDatos && <Row label="Motivo" value={form.reason || "—"} />}
                 <Row label="Costo" value={`$${specialty?.price} MXN`} />
               </div>
+
+              {/* Con sesion no hay paso de datos, asi que el motivo se pide aqui */}
+              {saltarDatos && (
+                <div>
+                  <Label htmlFor="reason">Motivo de consulta</Label>
+                  <Textarea
+                    id="reason"
+                    rows={3}
+                    value={form.reason}
+                    onChange={(e) => setForm({ ...form, reason: e.target.value })}
+                    placeholder="Cuentanos brevemente que te trae a consulta"
+                  />
+                </div>
+              )}
             </div>
           )}
 
@@ -208,15 +364,85 @@ function BookingFlow() {
             {step > 0 ? (
               <Button variant="ghost" onClick={back}><ArrowLeft className="mr-1 h-4 w-4" /> Atras</Button>
             ) : <span />}
-            {step === 4 ? (
-              <Button onClick={confirm} size="lg" className="ml-auto"><Check className="mr-1 h-4 w-4" /> Confirmar Cita</Button>
-            ) : step === 2 ? (
+            {pasoActual === "confirmacion" ? (
+              <Button onClick={confirm} size="lg" disabled={enviando} className="ml-auto">
+                <Check className="mr-1 h-4 w-4" /> {enviando ? "Confirmando..." : "Confirmar Cita"}
+              </Button>
+            ) : pasoActual === "fecha" ? (
               <Button disabled={!date || !time} onClick={next} className="ml-auto">Continuar <ArrowRight className="ml-1 h-4 w-4" /></Button>
-            ) : step === 3 ? (
-              <Button disabled={!form.name || !form.phone || !form.email} onClick={next} className="ml-auto">Continuar <ArrowRight className="ml-1 h-4 w-4" /></Button>
+            ) : pasoActual === "datos" ? (
+              <Button disabled={!datosCompletos} onClick={next} className="ml-auto">Continuar <ArrowRight className="ml-1 h-4 w-4" /></Button>
             ) : null}
           </div>
         </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Tarjeta de doctor con sus proximos huecos, como pide el PRD.
+ *
+ * Antes ponia "Disponible 10:00 - 18:00", que es su jornada, no si le
+ * queda sitio. Los chips son atajos: al pulsar uno se salta el paso de
+ * fecha y se va directo a confirmar.
+ */
+function TarjetaDoctor({
+  doctor, especialidad, duracion, seleccionado, onElegir,
+}: {
+  doctor: Doctor;
+  especialidad: string;
+  duracion: number;
+  seleccionado: boolean;
+  onElegir: (hueco?: FreeSlot) => void;
+}) {
+  const { data: huecos = [], isLoading } = useDoctorNextSlots(doctor.id, duracion);
+
+  return (
+    <div
+      className={`rounded-2xl border-2 p-4 transition ${
+        seleccionado ? "border-primary bg-accent/40" : "border-border hover:border-primary"
+      }`}
+    >
+      <button onClick={() => onElegir()} className="flex w-full items-center gap-4 text-left">
+        {doctor.photo
+          ? <img src={doctor.photo} alt={doctor.name} className="h-16 w-16 shrink-0 rounded-full object-cover" />
+          : <div className="grid h-16 w-16 shrink-0 place-items-center rounded-full bg-primary/10 text-primary">
+              <Stethoscope className="h-7 w-7" />
+            </div>}
+        <div className="min-w-0 flex-1">
+          <h3 className="font-semibold">{doctor.name}</h3>
+          <p className="text-sm text-muted-foreground">{especialidad}</p>
+        </div>
+      </button>
+
+      <div className="mt-3 border-t pt-3">
+        {isLoading ? (
+          <p className="text-xs text-muted-foreground">Buscando horarios...</p>
+        ) : huecos.length === 0 ? (
+          <p className="text-xs text-muted-foreground">Sin huecos proximos. Elige otro doctor.</p>
+        ) : (
+          <>
+            <p className="mb-2 text-xs font-medium text-muted-foreground">Proximos horarios</p>
+            <div className="flex flex-wrap gap-2">
+              {huecos.map((h) => (
+                <button
+                  key={`${h.date}-${h.time}`}
+                  onClick={() => onElegir(h)}
+                  className="rounded-lg border bg-background px-3 py-1.5 text-xs font-medium transition hover:border-primary hover:bg-accent"
+                >
+                  {formatDate(h.date)} · {h.time}
+                </button>
+              ))}
+              <button
+                onClick={() => onElegir()}
+                className="rounded-lg px-3 py-1.5 text-xs font-medium text-primary hover:underline"
+              >
+                Ver mas
+              </button>
+            </div>
+          </>
+        )}
       </div>
     </div>
   );
@@ -232,9 +458,9 @@ function Row({ label, value }: { label: string; value: string }) {
 }
 
 function DateTimeStep({
-  doctor, appointments, duration, date, time, onPick,
+  doctor, duration, date, time, onPick,
 }: {
-  doctor: any; appointments: any[]; duration: number; date: string; time: string;
+  doctor: Doctor; duration: number; date: string; time: string;
   onPick: (d: string, t: string) => void;
 }) {
   const [monthOffset, setMonthOffset] = useState(0);
@@ -253,12 +479,18 @@ function DateTimeStep({
     return doctor.schedule.days.includes(weekday);
   };
 
-  const takenSlots = (iso: string) =>
-    new Set(
-      appointments
-        .filter((a) => a.doctorId === doctor.id && a.date === iso && !["cancelled", "no_show"].includes(a.status))
-        .map((a) => a.time),
-    );
+  // Los huecos ocupados llegan por RPC: `anon` no puede leer `appointments`.
+  // Una cita bloquea todo su bloque, no solo su hora de inicio.
+  const { data: ocupados = [], isLoading: cargandoHuecos } = useDoctorBusyBlocks(doctor.id, date || undefined);
+
+  const hoy = todayISO();
+  const ahora = horaActual();
+
+  /** El PRD lo pide explicitamente: no se puede agendar en el pasado. */
+  const yaPaso = (slot: string) => date === hoy && slot <= ahora;
+
+  const isSlotFree = (slot: string) =>
+    !yaPaso(slot) && !ocupados.some((b) => rangesOverlap(slot, duration, b.time, b.duration));
 
   const cells: (Date | null)[] = [];
   for (let i = 0; i < firstWeekday; i++) cells.push(null);
@@ -278,7 +510,9 @@ function DateTimeStep({
         <div className="mt-1 grid grid-cols-7 gap-1">
           {cells.map((c, i) => {
             if (!c) return <div key={i} />;
-            const iso = c.toISOString().slice(0, 10);
+            // isoLocal, no toISOString: en zonas al este de UTC el
+            // calendario marcaria el dia anterior
+            const iso = isoLocal(c);
             const available = isDayAvailable(c);
             const selected = date === iso;
             return (
@@ -301,12 +535,16 @@ function DateTimeStep({
         <h4 className="mb-3 flex items-center gap-2 font-semibold"><CalIcon className="h-4 w-4" /> Horarios</h4>
         {!date ? (
           <p className="text-sm text-muted-foreground">Selecciona un dia primero.</p>
-        ) : (
-          <div className="grid grid-cols-3 gap-2">
-            {allSlots.map((s) => {
-              const taken = takenSlots(date).has(s);
-              if (taken) return null;
-              return (
+        ) : cargandoHuecos ? (
+          <p className="text-sm text-muted-foreground">Cargando horarios...</p>
+        ) : (() => {
+          const freeSlots = allSlots.filter(isSlotFree);
+          if (freeSlots.length === 0) {
+            return <p className="text-sm text-muted-foreground">No quedan horarios disponibles ese dia. Elige otra fecha.</p>;
+          }
+          return (
+            <div className="grid grid-cols-3 gap-2">
+              {freeSlots.map((s) => (
                 <button
                   key={s}
                   onClick={() => onPick(date, s)}
@@ -314,10 +552,10 @@ function DateTimeStep({
                     time === s ? "border-primary bg-primary text-primary-foreground" : "hover:border-primary hover:bg-accent"
                   }`}
                 >{s}</button>
-              );
-            })}
-          </div>
-        )}
+              ))}
+            </div>
+          );
+        })()}
       </div>
     </div>
   );

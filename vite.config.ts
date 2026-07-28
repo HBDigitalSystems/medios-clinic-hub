@@ -12,4 +12,13 @@ export default defineConfig({
     // nitro/vite builds from this
     server: { entry: "server" },
   },
+  nitro: {
+    // Esto es SSR, no un SPA: Vercel necesita el preset de Nitro para
+    // generar .vercel/output con la funcion de servidor.
+    //
+    // El paquete de Lovable pone "cloudflare-module" como defaultPreset, que
+    // es solo un fallback. Dentro de su sandbox lo fuerza igualmente, asi que
+    // fijar "vercel" aqui no rompe su preview.
+    preset: "vercel",
+  },
 });

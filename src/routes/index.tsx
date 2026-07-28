@@ -3,7 +3,9 @@ import {
   Stethoscope, SmilePlus, Baby, Scan, Apple, ShieldCheck, Zap, Database, Calendar, Phone, Mail, MapPin,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { useStore } from "@/lib/store";
+import { useClinic } from "@/lib/api/clinic";
+import { useServices } from "@/lib/api/services";
+import { useActiveDoctors } from "@/lib/api/doctors";
 
 const iconMap: Record<string, React.ComponentType<{ className?: string }>> = {
   Stethoscope, SmilePlus, Baby, Scan, Apple,
@@ -12,9 +14,9 @@ const iconMap: Record<string, React.ComponentType<{ className?: string }>> = {
 export const Route = createFileRoute("/")({
   head: () => ({
     meta: [
-      { title: "MediOS - Tu clinica. Tus datos. Tu sistema." },
-      { name: "description", content: "Agenda tu cita con doctores de medicina general, odontologia, pediatria, dermatologia y nutricion en Clinica MediOS." },
-      { property: "og:title", content: "MediOS - Clinica medica moderna" },
+      { title: "DoctorCita Clinica - Tu clinica. Tus datos. Tu sistema." },
+      { name: "description", content: "Agenda tu cita con doctores de medicina general, odontologia, pediatria, dermatologia y nutricion en DoctorCita Clinica." },
+      { property: "og:title", content: "DoctorCita Clinica - Clinica medica moderna" },
       { property: "og:description", content: "Agenda tu cita en linea con los mejores especialistas." },
     ],
   }),
@@ -22,7 +24,10 @@ export const Route = createFileRoute("/")({
 });
 
 function Landing() {
-  const { clinic, specialties, doctors } = useStore();
+  // Consultas publicas: RLS deja leer clinics, services y doctors sin sesion
+  const { data: clinic } = useClinic();
+  const { data: services = [] } = useServices();
+  const { data: doctors = [] } = useActiveDoctors();
 
   const testimonials = [
     { name: "Lucia M.", photo: "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=200&h=200&fit=crop", text: "Agendar fue rapidisimo y la atencion fue excelente. Me recordo la cita un dia antes." },
@@ -39,7 +44,7 @@ function Landing() {
             <div className="grid h-9 w-9 place-items-center rounded-xl bg-primary text-primary-foreground">
               <Stethoscope className="h-5 w-5" />
             </div>
-            <span className="text-lg font-bold">MediOS</span>
+            <span className="text-lg font-bold">DoctorCita Clinica</span>
           </Link>
           <nav className="flex items-center gap-2">
             <Link to="/auth" className="hidden text-sm font-medium text-muted-foreground hover:text-foreground sm:inline">Entrar</Link>
@@ -56,7 +61,7 @@ function Landing() {
         <div className="mx-auto grid max-w-6xl gap-10 px-4 py-16 md:grid-cols-2 md:py-24">
           <div className="flex flex-col justify-center">
             <span className="inline-flex w-fit items-center gap-2 rounded-full border border-primary/20 bg-primary/5 px-3 py-1 text-xs font-medium text-primary">
-              <ShieldCheck className="h-3.5 w-3.5" /> {clinic.name}
+              <ShieldCheck className="h-3.5 w-3.5" /> {clinic?.name ?? "DoctorCita Clinica"}
             </span>
             <h1 className="mt-4 text-4xl font-extrabold leading-tight tracking-tight md:text-6xl">
               Tu clinica.<br />Tus datos. <span className="text-primary">Tu sistema.</span>
@@ -90,7 +95,7 @@ function Landing() {
           <p className="mt-2 text-muted-foreground">Atencion integral con especialistas certificados.</p>
         </div>
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {specialties.map((s) => {
+          {services.map((s) => {
             const Icon = iconMap[s.icon] || Stethoscope;
             return (
               <div key={s.id} className="rounded-2xl border bg-card p-6 shadow-sm transition hover:shadow-md">
@@ -115,7 +120,7 @@ function Landing() {
           </div>
           <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
             {doctors.map((d) => {
-              const sp = specialties.find((s) => s.id === d.specialtyId);
+              const sp = services.find((s) => s.id === d.serviceId);
               return (
                 <div key={d.id} className="overflow-hidden rounded-2xl bg-card shadow-sm">
                   <img src={d.photo} alt={d.name} className="aspect-square w-full object-cover" />
@@ -130,9 +135,9 @@ function Landing() {
         </div>
       </section>
 
-      {/* Por que MediOS */}
+      {/* Por que DoctorCita Clinica */}
       <section className="mx-auto max-w-6xl px-4 py-16">
-        <h2 className="mb-10 text-center text-3xl font-bold">Por que MediOS</h2>
+        <h2 className="mb-10 text-center text-3xl font-bold">Por que DoctorCita Clinica</h2>
         <div className="grid gap-6 md:grid-cols-3">
           {[
             { icon: Database, title: "Tus datos son tuyos", text: "Sin secuestros de datos. Exporta lo que quieras cuando quieras, gratis." },
@@ -176,24 +181,24 @@ function Landing() {
               <div className="grid h-9 w-9 place-items-center rounded-xl bg-primary text-primary-foreground">
                 <Stethoscope className="h-5 w-5" />
               </div>
-              <span className="text-lg font-bold">MediOS</span>
+              <span className="text-lg font-bold">DoctorCita Clinica</span>
             </div>
             <p className="mt-3 text-sm text-muted-foreground">Tu clinica. Tus datos. Tu sistema.</p>
           </div>
           <div className="space-y-2 text-sm">
             <p className="font-semibold">Contacto</p>
-            <p className="flex items-center gap-2 text-muted-foreground"><MapPin className="h-4 w-4" /> {clinic.address}</p>
-            <p className="flex items-center gap-2 text-muted-foreground"><Phone className="h-4 w-4" /> {clinic.phone}</p>
-            <p className="flex items-center gap-2 text-muted-foreground"><Mail className="h-4 w-4" /> {clinic.email}</p>
+            <p className="flex items-center gap-2 text-muted-foreground"><MapPin className="h-4 w-4" /> {clinic?.address}</p>
+            <p className="flex items-center gap-2 text-muted-foreground"><Phone className="h-4 w-4" /> {clinic?.phone}</p>
+            <p className="flex items-center gap-2 text-muted-foreground"><Mail className="h-4 w-4" /> {clinic?.email}</p>
           </div>
           <div className="space-y-2 text-sm">
             <p className="font-semibold">Horario</p>
             <p className="text-muted-foreground">Lunes a Viernes</p>
-            <p className="text-muted-foreground">{clinic.openTime} - {clinic.closeTime}</p>
+            <p className="text-muted-foreground">{clinic?.openTime} - {clinic?.closeTime}</p>
           </div>
         </div>
         <div className="border-t py-4 text-center text-xs text-muted-foreground">
-          (c) {new Date().getFullYear()} MediOS. Demo construido para mostrar el producto.
+          (c) {new Date().getFullYear()} DoctorCita Clinica. Demo construido para mostrar el producto.
         </div>
       </footer>
     </div>

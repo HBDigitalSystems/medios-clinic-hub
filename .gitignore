@@ -16,9 +16,20 @@ dist-ssr
 .nitro
 *.local
 
+# Salida de build de Vercel (Build Output API)
+.vercel
+
+# Secretos: .env lleva la service_role key. Solo se versiona .env.example
+.env
+.env.*
+!.env.example
+
 # Wrangler / Cloudflare
 .wrangler/
 .dev.vars
+
+# Configuracion local de herramientas, no forma parte del producto
+.claude/
 
 # Editor directories and files
 .vscode/*

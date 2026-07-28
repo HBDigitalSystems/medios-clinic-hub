@@ -1,27 +1,50 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import {
   LayoutDashboard, Calendar, UserCog, Users, CreditCard, BarChart3, Settings,
-  Stethoscope, LogOut, RotateCcw, Plus, CheckCircle, XCircle, UserPlus, DollarSign,
-  Search, AlertCircle, X, Pencil,
+  Stethoscope, LogOut, Plus, CheckCircle, XCircle, UserPlus, DollarSign,
+  Search, AlertCircle, Pencil, Trash2, Loader2, RotateCcw,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import {
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription,
+} from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { BarChart, Bar, XAxis, YAxis, ResponsiveContainer, Tooltip as RTooltip, PieChart, Pie, Cell } from "recharts";
-import { useStore, getPatientBalance } from "@/lib/store";
-import { statusBadgeClass, statusLabel, invoiceBadgeClass, doctorColor, formatMoney, todayISO, formatDate } from "@/lib/medi-utils";
-import type { AppointmentStatus } from "@/lib/types";
+import { useAuth } from "@/lib/auth";
+import { ProtectedRoute } from "@/components/auth/protected-route";
+import { ImageUpload } from "@/components/ui/image-upload";
+import { OnboardingWizard } from "@/components/onboarding-wizard";
+import { useStore } from "@/lib/store";
+import { useClinic, useUpdateClinic, useResetDemoData } from "@/lib/api/clinic";
+import { useServices, useCreateService, useUpdateService, useDeleteService } from "@/lib/api/services";
+import { useDoctors, useCreateDoctor, useUpdateDoctor, useDeleteDoctor } from "@/lib/api/doctors";
+import { usePatients, useCreatePatient, useUpdatePatient, useDeletePatient } from "@/lib/api/patients";
+import { useAppointments, useCreateAppointment, useTransitionAppointment, transicionesValidas } from "@/lib/api/appointments";
+import { useInvoices, useCreateInvoice, useMarkInvoicePaid, useCancelInvoice, saldoPendiente } from "@/lib/api/invoices";
+import type { Appointment, Clinic, Doctor, Invoice, Patient, PaymentMethod, Service } from "@/lib/api/types";
+import {
+  statusBadgeClass, statusLabel, invoiceBadgeClass, doctorColor, formatMoney,
+  todayISO, formatDate, formatSchedule, inicioDeMes, inicioDeSemana, sumarDias,
+} from "@/lib/medi-utils";
 
 export const Route = createFileRoute("/hub")({
-  head: () => ({ meta: [{ title: "Panel Admin - MediOS" }] }),
-  component: Hub,
+  head: () => ({ meta: [{ title: "Panel Admin - DoctorCita Clinica" }] }),
+  component: HubRoute,
 });
+
+function HubRoute() {
+  return (
+    <ProtectedRoute allow="admin">
+      <Hub />
+    </ProtectedRoute>
+  );
+}
 
 const TABS = [
   { key: "dashboard", label: "Dashboard", icon: LayoutDashboard },
@@ -37,23 +60,55 @@ type TabKey = typeof TABS[number]["key"];
 
 function Hub() {
   const navigate = useNavigate();
-  const { reset, setCurrentUser, clinic } = useStore();
+  const { signOut } = useAuth();
+  const { data: clinic } = useClinic();
+  const { data: doctors = [], isLoading: cargandoDoctores } = useDoctors();
+  const { data: services = [], isLoading: cargandoServicios } = useServices();
+  const { onboardingCompleted, setOnboardingCompleted } = useStore();
   const [tab, setTab] = useState<TabKey>("dashboard");
   const [collapsed, setCollapsed] = useState(false);
+  const [forzarWizard, setForzarWizard] = useState(false);
 
-  const logout = () => { setCurrentUser(null); navigate({ to: "/auth" }); };
-  const handleReset = () => { reset(); toast.success("Datos demo restablecidos"); };
+  const logout = async () => { await signOut(); navigate({ to: "/auth" }); };
+
+  // El flag de localStorage por si solo no basta: si el admin cambia de
+  // navegador volveria a salir el asistente con la clinica ya montada.
+  // Se cruza con el estado real de la base.
+  const cargando = cargandoDoctores || cargandoServicios;
+  const clinicaConfigurada = doctors.length > 0 && services.length > 0;
+  const mostrarWizard = forzarWizard || (!cargando && !onboardingCompleted && !clinicaConfigurada);
+
+  // Clinica ya montada y flag sin marcar (otro navegador, otro admin):
+  // se da por hecho en silencio, sin molestar con el asistente.
+  useEffect(() => {
+    if (!cargando && !onboardingCompleted && clinicaConfigurada) {
+      setOnboardingCompleted(true);
+    }
+  }, [cargando, onboardingCompleted, clinicaConfigurada, setOnboardingCompleted]);
+
+  if (mostrarWizard) {
+    return (
+      <OnboardingWizard
+        onFinish={() => {
+          setOnboardingCompleted(true);
+          setForzarWizard(false);
+          // El boton promete "Ir al Dashboard", no volver al tab de antes
+          setTab("dashboard");
+          toast.success("Todo listo");
+        }}
+      />
+    );
+  }
 
   return (
     <div className="flex min-h-screen bg-accent/10">
-      {/* Sidebar desktop */}
       <aside className={`hidden border-r bg-sidebar md:flex md:flex-col ${collapsed ? "w-16" : "w-60"} transition-all`}>
         <div className="flex h-16 items-center justify-between border-b px-4">
           <Link to="/" className="flex items-center gap-2 overflow-hidden">
             <div className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-primary text-primary-foreground">
               <Stethoscope className="h-4 w-4" />
             </div>
-            {!collapsed && <span className="truncate font-bold">MediOS</span>}
+            {!collapsed && <span className="truncate font-bold">DoctorCita</span>}
           </Link>
           <button onClick={() => setCollapsed(!collapsed)} className="rounded p-1 hover:bg-accent">
             <ChevronIcon collapsed={collapsed} />
@@ -75,10 +130,6 @@ function Hub() {
           ))}
         </nav>
         <div className="space-y-1 border-t p-2">
-          <button onClick={handleReset} className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm text-muted-foreground hover:bg-accent">
-            <RotateCcw className="h-4 w-4 shrink-0" />
-            {!collapsed && <span>Reset demo</span>}
-          </button>
           <button onClick={logout} className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm text-muted-foreground hover:bg-accent">
             <LogOut className="h-4 w-4 shrink-0" />
             {!collapsed && <span>Salir</span>}
@@ -86,12 +137,11 @@ function Hub() {
         </div>
       </aside>
 
-      {/* Main area */}
       <div className="flex min-w-0 flex-1 flex-col">
         <header className="flex h-16 items-center justify-between border-b bg-background px-4 md:px-6">
           <div className="min-w-0">
             <h1 className="truncate text-lg font-bold">{TABS.find((t) => t.key === tab)?.label}</h1>
-            <p className="truncate text-xs text-muted-foreground">{clinic.name}</p>
+            <p className="truncate text-xs text-muted-foreground">{clinic?.name ?? ""}</p>
           </div>
           <Button asChild variant="ghost" size="sm" className="md:hidden">
             <Link to="/"><Stethoscope className="h-4 w-4" /></Link>
@@ -105,10 +155,9 @@ function Hub() {
           {tab === "pacientes" && <PatientsTab />}
           {tab === "cobros" && <InvoicesTab />}
           {tab === "reportes" && <ReportsTab />}
-          {tab === "config" && <ConfigTab />}
+          {tab === "config" && <ConfigTab onRelanzarWizard={() => setForzarWizard(true)} />}
         </main>
 
-        {/* Mobile bottom nav */}
         <nav className="fixed bottom-0 left-0 right-0 z-30 grid grid-cols-7 border-t bg-background md:hidden">
           {TABS.map((t) => (
             <button
@@ -136,27 +185,58 @@ function ChevronIcon({ collapsed }: { collapsed: boolean }) {
   );
 }
 
+function Cargando() {
+  return (
+    <div className="grid place-items-center py-24">
+      <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+    </div>
+  );
+}
+
 /* ============== DASHBOARD ============== */
 function DashboardTab() {
-  const { appointments, invoices, patients } = useStore();
+  const { data: appointments = [], isLoading } = useAppointments();
+  const { data: invoices = [] } = useInvoices();
+  const { data: patients = [] } = usePatients();
+
   const today = todayISO();
+  const desdeMes = inicioDeMes();
+
   const todayApts = appointments.filter((a) => a.date === today);
   const completed = appointments.filter((a) => a.status === "completed").length;
   const noShows = appointments.filter((a) => a.status === "no_show").length;
-  const todayIncome = invoices.filter((i) => i.paidAt === today && i.status === "paid").reduce((s, i) => s + i.amount, 0);
-  const monthIncome = invoices.filter((i) => i.status === "paid").reduce((s, i) => s + i.amount, 0);
+  const todayIncome = invoices
+    .filter((i) => i.status === "paid" && i.paidAt === today)
+    .reduce((s, i) => s + i.amount, 0);
 
-  const last7: { day: string; count: number }[] = [];
-  for (let i = 6; i >= 0; i--) {
-    const d = new Date(); d.setDate(d.getDate() - i);
-    const iso = d.toISOString().slice(0, 10);
-    last7.push({ day: d.toLocaleDateString("es-MX", { weekday: "short" }), count: appointments.filter((a) => a.date === iso).length });
-  }
+  // Bug B6 de ESTADO.md: la KPI decia "Pacientes nuevos" pero pintaba el
+  // total. La capa API no expone `created_at` de patients, asi que se
+  // etiqueta por lo que realmente es: el total de pacientes.
+  const last7 = useMemo(() => {
+    const out: { day: string; count: number }[] = [];
+    for (let i = 6; i >= 0; i--) {
+      const iso = sumarDias(today, -i);
+      const d = new Date(iso + "T00:00:00");
+      out.push({
+        day: d.toLocaleDateString("es-MX", { weekday: "short" }),
+        count: appointments.filter((a) => a.date === iso).length,
+      });
+    }
+    return out;
+  }, [appointments, today]);
+
+  const monthIncome = invoices
+    .filter((i) => i.status === "paid" && i.paidAt && i.paidAt >= desdeMes)
+    .reduce((s, i) => s + i.amount, 0);
 
   const alerts = [
-    ...appointments.filter((a) => a.status === "scheduled").slice(0, 3).map((a) => ({ type: "Cita sin confirmar", text: `${a.date} ${a.time}` })),
-    ...invoices.filter((i) => i.status === "pending").map((i) => ({ type: "Cobro pendiente", text: formatMoney(i.amount) })),
+    ...appointments.filter((a) => a.status === "scheduled").slice(0, 3)
+      .map((a) => ({ type: "Cita sin confirmar", text: `${formatDate(a.date)} ${a.time}` })),
+    ...invoices.filter((i) => i.status === "pending")
+      .map((i) => ({ type: "Cobro pendiente", text: formatMoney(i.amount) })),
   ];
+
+  if (isLoading) return <Cargando />;
 
   return (
     <div className="space-y-6 p-4 md:p-6">
@@ -175,7 +255,7 @@ function DashboardTab() {
             <ResponsiveContainer>
               <BarChart data={last7}>
                 <XAxis dataKey="day" tickLine={false} axisLine={false} className="text-xs" />
-                <YAxis tickLine={false} axisLine={false} className="text-xs" />
+                <YAxis tickLine={false} axisLine={false} allowDecimals={false} className="text-xs" />
                 <RTooltip cursor={{ fill: "rgba(0,0,0,0.04)" }} />
                 <Bar dataKey="count" fill="oklch(0.55 0.20 258)" radius={[8, 8, 0, 0]} />
               </BarChart>
@@ -183,9 +263,11 @@ function DashboardTab() {
           </div>
         </div>
         <div className="rounded-2xl border bg-card p-5 shadow-sm">
-          <h3 className="mb-4 flex items-center gap-2 font-semibold"><AlertCircle className="h-4 w-4 text-amber-500" /> Alertas</h3>
+          <h3 className="mb-4 flex items-center gap-2 font-semibold">
+            <AlertCircle className="h-4 w-4 text-amber-500" /> Alertas
+          </h3>
           <ul className="space-y-2 text-sm">
-            {alerts.length === 0 && <li className="text-muted-foreground">Todo en orden ✅</li>}
+            {alerts.length === 0 && <li className="text-muted-foreground">Todo en orden</li>}
             {alerts.map((a, i) => (
               <li key={i} className="rounded-lg bg-accent/40 px-3 py-2">
                 <p className="text-xs font-semibold text-muted-foreground">{a.type}</p>
@@ -202,7 +284,10 @@ function DashboardTab() {
   );
 }
 
-function Kpi({ icon: Icon, label, value, color }: { icon: any; label: string; value: number | string; color: string }) {
+function Kpi({ icon: Icon, label, value, color }: {
+  icon: React.ComponentType<{ className?: string }>;
+  label: string; value: number | string; color: string;
+}) {
   return (
     <div className="rounded-2xl border bg-card p-4 shadow-sm">
       <div className="flex items-start justify-between">
@@ -220,26 +305,34 @@ function Kpi({ icon: Icon, label, value, color }: { icon: any; label: string; va
 
 /* ============== AGENDA ============== */
 function AgendaTab() {
-  const { appointments, doctors, patients } = useStore();
+  const { data: appointments = [], isLoading } = useAppointments();
+  const { data: doctors = [] } = useDoctors();
+  const { data: patients = [] } = usePatients();
   const [view, setView] = useState<"day" | "week">("day");
   const [dateOffset, setDateOffset] = useState(0);
   const [selectedApt, setSelectedApt] = useState<string | null>(null);
   const [newOpen, setNewOpen] = useState(false);
 
-  const base = new Date(); base.setDate(base.getDate() + dateOffset);
+  const baseIso = sumarDias(todayISO(), dateOffset);
+  const base = new Date(baseIso + "T00:00:00");
 
-  const days = view === "day" ? [base] : [...Array(7)].map((_, i) => {
-    const d = new Date(base); d.setDate(base.getDate() - base.getDay() + i + 1); return d;
-  });
+  const days = view === "day"
+    ? [baseIso]
+    : [...Array(7)].map((_, i) => sumarDias(baseIso, -((base.getDay() + 6) % 7) + i));
 
   const apt = appointments.find((a) => a.id === selectedApt);
+
+  if (isLoading) return <Cargando />;
 
   return (
     <div className="space-y-4 p-4 md:p-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-2">
           <Button variant="outline" size="sm" onClick={() => setDateOffset(dateOffset - (view === "day" ? 1 : 7))}>‹</Button>
-          <span className="font-semibold capitalize">{days[0].toLocaleDateString("es-MX", { day: "numeric", month: "long" })}{view === "week" ? ` - ${days[6].toLocaleDateString("es-MX", { day: "numeric", month: "long" })}` : ""}</span>
+          <span className="font-semibold capitalize">
+            {new Date(days[0] + "T00:00:00").toLocaleDateString("es-MX", { day: "numeric", month: "long" })}
+            {view === "week" ? ` - ${new Date(days[6] + "T00:00:00").toLocaleDateString("es-MX", { day: "numeric", month: "long" })}` : ""}
+          </span>
           <Button variant="outline" size="sm" onClick={() => setDateOffset(dateOffset + (view === "day" ? 1 : 7))}>›</Button>
           <Button variant="ghost" size="sm" onClick={() => setDateOffset(0)}>Hoy</Button>
         </div>
@@ -253,8 +346,8 @@ function AgendaTab() {
       </div>
 
       <div className={`grid gap-3 ${view === "week" ? "md:grid-cols-7" : "grid-cols-1"}`}>
-        {days.map((d) => {
-          const iso = d.toISOString().slice(0, 10);
+        {days.map((iso) => {
+          const d = new Date(iso + "T00:00:00");
           const dayApts = appointments.filter((a) => a.date === iso).sort((a, b) => a.time.localeCompare(b.time));
           return (
             <div key={iso} className="rounded-2xl border bg-card p-3 shadow-sm">
@@ -289,85 +382,144 @@ function AgendaTab() {
         })}
       </div>
 
-      {apt && <AppointmentDialog id={apt.id} onClose={() => setSelectedApt(null)} />}
+      {apt && <AppointmentDialog appointment={apt} onClose={() => setSelectedApt(null)} />}
       {newOpen && <NewAppointmentDialog onClose={() => setNewOpen(false)} />}
     </div>
   );
 }
 
-function AppointmentDialog({ id, onClose }: { id: string; onClose: () => void }) {
-  const { appointments, doctors, patients, specialties, updateAppointmentStatus } = useStore();
-  const a = appointments.find((x) => x.id === id)!;
-  const doc = doctors.find((d) => d.id === a.doctorId);
-  const pat = patients.find((p) => p.id === a.patientId);
-  const sp = specialties.find((s) => s.id === a.specialtyId);
+function AppointmentDialog({ appointment, onClose }: { appointment: Appointment; onClose: () => void }) {
+  const { data: doctors = [] } = useDoctors();
+  const { data: patients = [] } = usePatients();
+  const { data: services = [] } = useServices();
+  const transition = useTransitionAppointment();
 
-  const change = (next: AppointmentStatus) => {
-    const r = updateAppointmentStatus(a.id, next);
-    if (!r.ok) toast.error(r.error || "Error");
-    else toast.success("Estado actualizado");
+  const doc = doctors.find((d) => d.id === appointment.doctorId);
+  const pat = patients.find((p) => p.id === appointment.patientId);
+  const sp = services.find((s) => s.id === appointment.serviceId);
+
+  // La UI solo ofrece transiciones legales; el resto ni se pinta
+  const posibles = transicionesValidas[appointment.status];
+
+  const etiquetaAccion: Record<string, string> = {
+    confirmed: "Confirmar",
+    cancelled: "Cancelar cita",
+    no_show: "Marcar no-show",
+    in_progress: "Iniciar consulta",
+    completed: "Completar",
+  };
+
+  const cambiar = async (hasta: typeof posibles[number]) => {
+    try {
+      await transition.mutateAsync({ id: appointment.id, desde: appointment.status, hasta });
+      toast.success("Estado actualizado");
+    } catch (e) {
+      toast.error((e as Error).message);
+    }
   };
 
   return (
     <Dialog open onOpenChange={onClose}>
       <DialogContent className="max-w-md">
-        <DialogHeader>
-          <DialogTitle>Detalle de cita</DialogTitle>
-        </DialogHeader>
+        <DialogHeader><DialogTitle>Detalle de cita</DialogTitle></DialogHeader>
         <div className="space-y-2 text-sm">
           <Row label="Paciente" value={pat?.name || ""} />
           <Row label="Doctor" value={doc?.name || ""} />
           <Row label="Servicio" value={sp?.name || ""} />
-          <Row label="Fecha" value={formatDate(a.date)} />
-          <Row label="Hora" value={a.time} />
-          <Row label="Motivo" value={a.reason} />
-          <div className="flex justify-between"><span className="text-muted-foreground">Estado</span><span className={`rounded-full px-2 py-0.5 text-xs ${statusBadgeClass[a.status]}`}>{statusLabel[a.status]}</span></div>
+          <Row label="Fecha" value={formatDate(appointment.date)} />
+          <Row label="Hora" value={`${appointment.time} (${appointment.duration} min)`} />
+          <Row label="Motivo" value={appointment.reason || "—"} />
+          <div className="flex justify-between">
+            <span className="text-muted-foreground">Estado</span>
+            <span className={`rounded-full px-2 py-0.5 text-xs ${statusBadgeClass[appointment.status]}`}>{statusLabel[appointment.status]}</span>
+          </div>
         </div>
         <DialogFooter className="flex-wrap gap-2 sm:justify-start">
-          {a.status === "scheduled" && <Button size="sm" onClick={() => change("confirmed")}>Confirmar</Button>}
-          {(a.status === "scheduled" || a.status === "confirmed") && <Button size="sm" variant="outline" onClick={() => change("cancelled")}>Cancelar</Button>}
-          {(a.status === "scheduled" || a.status === "confirmed") && <Button size="sm" variant="outline" onClick={() => change("no_show")}>No-show</Button>}
+          {posibles.length === 0 && <p className="text-xs text-muted-foreground">Esta cita ya esta cerrada.</p>}
+          {posibles.map((p) => (
+            <Button
+              key={p}
+              size="sm"
+              variant={p === "cancelled" || p === "no_show" ? "outline" : "default"}
+              disabled={transition.isPending}
+              onClick={() => cambiar(p)}
+            >
+              {etiquetaAccion[p] ?? p}
+            </Button>
+          ))}
         </DialogFooter>
       </DialogContent>
     </Dialog>
   );
 }
 
-function NewAppointmentDialog({ onClose }: { onClose: () => void }) {
-  const { patients, doctors, specialties, addAppointment } = useStore();
-  const [patientId, setPatientId] = useState(patients[0]?.id || "");
-  const [doctorId, setDoctorId] = useState(doctors[0]?.id || "");
-  const [specialtyId, setSpecialtyId] = useState(specialties[0]?.id || "");
+function NewAppointmentDialog({ onClose, pacienteFijo }: { onClose: () => void; pacienteFijo?: Patient }) {
+  const { data: clinic } = useClinic();
+  const { data: patients = [] } = usePatients();
+  const { data: doctors = [] } = useDoctors();
+  const { data: services = [] } = useServices();
+  const crear = useCreateAppointment();
+
+  const [patientId, setPatientId] = useState(pacienteFijo?.id ?? "");
+  const [doctorId, setDoctorId] = useState("");
+  const [serviceId, setServiceId] = useState("");
   const [date, setDate] = useState(todayISO());
   const [time, setTime] = useState("10:00");
   const [reason, setReason] = useState("");
 
-  const submit = () => {
-    const sp = specialties.find((s) => s.id === specialtyId);
-    const apt = addAppointment({ patientId, doctorId, specialtyId, date, time, duration: sp?.duration || 30, reason });
-    if (!apt) { toast.error("Horario ocupado"); return; }
-    toast.success("Cita creada");
-    onClose();
+  const servicio = services.find((s) => s.id === serviceId);
+
+  const submit = async () => {
+    if (!clinic) return;
+    if (!patientId || !doctorId || !serviceId) {
+      toast.error("Faltan paciente, doctor o servicio");
+      return;
+    }
+    try {
+      await crear.mutateAsync({
+        clinicId: clinic.id,
+        patientId,
+        doctorId,
+        serviceId,
+        date,
+        time,
+        duration: servicio?.duration ?? 30,
+        reason,
+      });
+      toast.success("Cita creada");
+      onClose();
+    } catch (e) {
+      // Si choca con otra cita, el mensaje viene de appointments_no_overlap
+      toast.error((e as Error).message);
+    }
   };
 
   return (
     <Dialog open onOpenChange={onClose}>
       <DialogContent>
-        <DialogHeader><DialogTitle>Nueva cita</DialogTitle></DialogHeader>
+        <DialogHeader>
+          <DialogTitle>Nueva cita</DialogTitle>
+          {pacienteFijo && <DialogDescription>Para {pacienteFijo.name}</DialogDescription>}
+        </DialogHeader>
         <div className="grid gap-3">
-          <div><Label>Paciente</Label>
-            <Select value={patientId} onValueChange={setPatientId}><SelectTrigger><SelectValue /></SelectTrigger>
-              <SelectContent>{patients.map((p) => <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>)}</SelectContent>
-            </Select>
-          </div>
+          {!pacienteFijo && (
+            <div><Label>Paciente</Label>
+              <Select value={patientId} onValueChange={setPatientId}>
+                <SelectTrigger><SelectValue placeholder="Elige un paciente" /></SelectTrigger>
+                <SelectContent>{patients.map((p) => <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>)}</SelectContent>
+              </Select>
+            </div>
+          )}
           <div><Label>Doctor</Label>
-            <Select value={doctorId} onValueChange={setDoctorId}><SelectTrigger><SelectValue /></SelectTrigger>
+            <Select value={doctorId} onValueChange={setDoctorId}>
+              <SelectTrigger><SelectValue placeholder="Elige un doctor" /></SelectTrigger>
               <SelectContent>{doctors.map((d) => <SelectItem key={d.id} value={d.id}>{d.name}</SelectItem>)}</SelectContent>
             </Select>
           </div>
           <div><Label>Servicio</Label>
-            <Select value={specialtyId} onValueChange={setSpecialtyId}><SelectTrigger><SelectValue /></SelectTrigger>
-              <SelectContent>{specialties.map((s) => <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>)}</SelectContent>
+            <Select value={serviceId} onValueChange={setServiceId}>
+              <SelectTrigger><SelectValue placeholder="Elige un servicio" /></SelectTrigger>
+              <SelectContent>{services.map((s) => <SelectItem key={s.id} value={s.id}>{s.name} ({s.duration} min)</SelectItem>)}</SelectContent>
             </Select>
           </div>
           <div className="grid grid-cols-2 gap-3">
@@ -378,7 +530,9 @@ function NewAppointmentDialog({ onClose }: { onClose: () => void }) {
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={onClose}>Cancelar</Button>
-          <Button onClick={submit}>Crear cita</Button>
+          <Button onClick={submit} disabled={crear.isPending}>
+            {crear.isPending ? "Creando..." : "Crear cita"}
+          </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -389,105 +543,306 @@ function Row({ label, value }: { label: string; value: string }) {
   return <div className="flex justify-between gap-3"><span className="text-muted-foreground">{label}</span><span className="text-right font-medium">{value}</span></div>;
 }
 
-/* ============== DOCTORS ============== */
-function DoctorsTab() {
-  const { doctors, specialties, appointments, toggleDoctorActive, addDoctor } = useStore();
-  const [open, setOpen] = useState(false);
-  const [form, setForm] = useState({ name: "", specialtyId: specialties[0]?.id || "", photo: "", start: "09:00", end: "17:00", bio: "" });
+/* ============== DOCTORES ============== */
+const DIAS = [
+  { n: 1, label: "Lun" }, { n: 2, label: "Mar" }, { n: 3, label: "Mie" },
+  { n: 4, label: "Jue" }, { n: 5, label: "Vie" }, { n: 6, label: "Sab" }, { n: 7, label: "Dom" },
+];
 
-  const submit = () => {
-    if (!form.name) { toast.error("Falta el nombre"); return; }
-    addDoctor({
-      name: form.name, specialtyId: form.specialtyId,
-      photo: form.photo || "https://images.unsplash.com/photo-1537368910025-700350fe46c7?w=400&h=400&fit=crop",
-      schedule: { days: [1, 2, 3, 4, 5], start: form.start, end: form.end }, active: true, bio: form.bio,
-    });
-    toast.success("Doctor agregado");
-    setOpen(false);
-    setForm({ name: "", specialtyId: specialties[0]?.id || "", photo: "", start: "09:00", end: "17:00", bio: "" });
+function DoctorsTab() {
+  const { data: doctors = [], isLoading } = useDoctors();
+  const { data: services = [] } = useServices();
+  const { data: appointments = [] } = useAppointments();
+  const actualizar = useUpdateDoctor();
+  const borrar = useDeleteDoctor();
+
+  const [editando, setEditando] = useState<Doctor | null>(null);
+  const [creando, setCreando] = useState(false);
+  const [confirmarBorrado, setConfirmarBorrado] = useState<Doctor | null>(null);
+
+  const desdeSemana = inicioDeSemana();
+
+  const toggleActivo = async (d: Doctor) => {
+    try {
+      await actualizar.mutateAsync({ id: d.id, patch: { active: !d.active } });
+      toast.success(d.active ? "Doctor desactivado" : "Doctor activado");
+    } catch (e) {
+      toast.error((e as Error).message);
+    }
   };
+
+  const eliminar = async (d: Doctor) => {
+    try {
+      await borrar.mutateAsync(d.id);
+      toast.success("Doctor eliminado");
+      setConfirmarBorrado(null);
+    } catch (e) {
+      toast.error((e as Error).message);
+    }
+  };
+
+  if (isLoading) return <Cargando />;
 
   return (
     <div className="space-y-4 p-4 md:p-6">
       <div className="flex justify-end">
-        <Button onClick={() => setOpen(true)}><Plus className="mr-1 h-4 w-4" /> Agregar Doctor</Button>
+        <Button onClick={() => setCreando(true)}><Plus className="mr-1 h-4 w-4" /> Agregar Doctor</Button>
       </div>
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {doctors.map((d) => {
-          const sp = specialties.find((s) => s.id === d.specialtyId);
-          const weekApts = appointments.filter((a) => a.doctorId === d.id).length;
+          const sp = services.find((s) => s.id === d.serviceId);
+          // Bug B5: antes contaba el historico entero bajo la etiqueta "esta semana"
+          const citasSemana = appointments.filter(
+            (a) => a.doctorId === d.id && a.date >= desdeSemana && a.date <= sumarDias(desdeSemana, 6),
+          ).length;
           const noShows = appointments.filter((a) => a.doctorId === d.id && a.status === "no_show").length;
           return (
             <div key={d.id} className="rounded-2xl border bg-card p-5 shadow-sm">
               <div className="flex items-center gap-3">
-                <img src={d.photo} alt={d.name} className="h-14 w-14 shrink-0 rounded-full object-cover" />
+                {d.photo
+                  ? <img src={d.photo} alt={d.name} className="h-14 w-14 shrink-0 rounded-full object-cover" />
+                  : <div className="grid h-14 w-14 shrink-0 place-items-center rounded-full bg-primary/10 text-primary"><Stethoscope className="h-6 w-6" /></div>}
                 <div className="min-w-0 flex-1">
                   <h3 className="truncate font-semibold">{d.name}</h3>
-                  <p className="truncate text-sm text-primary">{sp?.name}</p>
+                  <p className="truncate text-sm text-primary">{sp?.name ?? "Sin especialidad"}</p>
                 </div>
-                <Switch checked={d.active} onCheckedChange={() => toggleDoctorActive(d.id)} />
+                <Switch checked={d.active} onCheckedChange={() => toggleActivo(d)} />
               </div>
-              <p className="mt-3 text-xs text-muted-foreground">Horario: L-V {d.schedule.start} - {d.schedule.end}</p>
-              <div className="mt-3 flex gap-2 text-xs">
-                <span className="rounded-full bg-accent px-2 py-1">{weekApts} citas</span>
+              {/* Bug B2: antes ponia "L-V" fijo aunque el doctor trabajase L,M,J */}
+              <p className="mt-3 text-xs text-muted-foreground">
+                {formatSchedule(d.schedule.days, d.schedule.start, d.schedule.end)}
+              </p>
+              <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
+                <span className="rounded-full bg-accent px-2 py-1">{citasSemana} citas esta semana</span>
                 <span className="rounded-full bg-rose-100 px-2 py-1 text-rose-700">{noShows} no-shows</span>
+                {d.userId
+                  ? <span className="rounded-full bg-emerald-100 px-2 py-1 text-emerald-700">cuenta vinculada</span>
+                  : <span className="rounded-full bg-slate-100 px-2 py-1 text-slate-600">sin cuenta</span>}
+              </div>
+              <div className="mt-4 flex gap-2">
+                <Button size="sm" variant="outline" onClick={() => setEditando(d)}>
+                  <Pencil className="mr-1 h-3.5 w-3.5" /> Editar
+                </Button>
+                <Button size="sm" variant="ghost" className="text-rose-600" onClick={() => setConfirmarBorrado(d)}>
+                  <Trash2 className="h-3.5 w-3.5" />
+                </Button>
               </div>
             </div>
           );
         })}
       </div>
 
-      <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent>
-          <DialogHeader><DialogTitle>Agregar Doctor</DialogTitle></DialogHeader>
-          <div className="grid gap-3">
-            <div><Label>Nombre</Label><Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /></div>
-            <div><Label>Especialidad</Label>
-              <Select value={form.specialtyId} onValueChange={(v) => setForm({ ...form, specialtyId: v })}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>{specialties.map((s) => <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>)}</SelectContent>
-              </Select>
-            </div>
-            <div><Label>Foto URL (opcional)</Label><Input value={form.photo} onChange={(e) => setForm({ ...form, photo: e.target.value })} /></div>
-            <div className="grid grid-cols-2 gap-3">
-              <div><Label>Inicio</Label><Input type="time" value={form.start} onChange={(e) => setForm({ ...form, start: e.target.value })} /></div>
-              <div><Label>Fin</Label><Input type="time" value={form.end} onChange={(e) => setForm({ ...form, end: e.target.value })} /></div>
-            </div>
-            <div><Label>Bio</Label><Textarea rows={2} value={form.bio} onChange={(e) => setForm({ ...form, bio: e.target.value })} /></div>
-          </div>
-          <DialogFooter><Button variant="outline" onClick={() => setOpen(false)}>Cancelar</Button><Button onClick={submit}>Agregar</Button></DialogFooter>
+      {(creando || editando) && (
+        <DoctorDialog
+          doctor={editando}
+          onClose={() => { setCreando(false); setEditando(null); }}
+        />
+      )}
+
+      <Dialog open={!!confirmarBorrado} onOpenChange={() => setConfirmarBorrado(null)}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Eliminar a {confirmarBorrado?.name}?</DialogTitle>
+            <DialogDescription>
+              Se borraran tambien sus citas. Esta accion no se puede deshacer.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setConfirmarBorrado(null)}>Volver</Button>
+            <Button variant="destructive" disabled={borrar.isPending} onClick={() => confirmarBorrado && eliminar(confirmarBorrado)}>
+              {borrar.isPending ? "Eliminando..." : "Eliminar"}
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>
   );
 }
 
-/* ============== PATIENTS ============== */
-function PatientsTab() {
-  const { patients, appointments, invoices, doctors } = useStore();
-  const [q, setQ] = useState("");
-  const [selected, setSelected] = useState<string | null>(null);
+/** Alta y edicion comparten formulario: los campos son los mismos. */
+function DoctorDialog({ doctor, onClose }: { doctor: Doctor | null; onClose: () => void }) {
+  const { data: clinic } = useClinic();
+  const { data: services = [] } = useServices();
+  const crear = useCreateDoctor();
+  const actualizar = useUpdateDoctor();
 
-  const filtered = patients.filter((p) => p.name.toLowerCase().includes(q.toLowerCase()) || p.phone.includes(q));
-  const sel = patients.find((p) => p.id === selected);
+  const [name, setName] = useState(doctor?.name ?? "");
+  const [serviceId, setServiceId] = useState(doctor?.serviceId ?? "");
+  const [photo, setPhoto] = useState(doctor?.photo ?? "");
+  const [bio, setBio] = useState(doctor?.bio ?? "");
+  const [days, setDays] = useState<number[]>(doctor?.schedule.days ?? [1, 2, 3, 4, 5]);
+  const [start, setStart] = useState(doctor?.schedule.start ?? "09:00");
+  const [end, setEnd] = useState(doctor?.schedule.end ?? "17:00");
+
+  const toggleDia = (n: number) =>
+    setDays((prev) => (prev.includes(n) ? prev.filter((x) => x !== n) : [...prev, n].sort((a, b) => a - b)));
+
+  const guardar = async () => {
+    if (!name.trim()) { toast.error("Falta el nombre"); return; }
+    if (days.length === 0) { toast.error("Elige al menos un dia de trabajo"); return; }
+    if (end <= start) { toast.error("La hora de fin debe ser posterior a la de inicio"); return; }
+
+    const schedule = { days, start, end };
+    try {
+      if (doctor) {
+        await actualizar.mutateAsync({
+          id: doctor.id,
+          patch: { name, serviceId: serviceId || null, photo, bio, schedule },
+        });
+        toast.success("Doctor actualizado");
+      } else {
+        if (!clinic) return;
+        await crear.mutateAsync({
+          clinicId: clinic.id,
+          serviceId: serviceId || null,
+          name, photo, bio, schedule,
+        });
+        toast.success("Doctor agregado");
+      }
+      onClose();
+    } catch (e) {
+      toast.error((e as Error).message);
+    }
+  };
+
+  const guardando = crear.isPending || actualizar.isPending;
+
+  return (
+    <Dialog open onOpenChange={onClose}>
+      <DialogContent className="max-h-[90vh] overflow-y-auto">
+        <DialogHeader><DialogTitle>{doctor ? "Editar doctor" : "Agregar doctor"}</DialogTitle></DialogHeader>
+
+        <div className="grid gap-4">
+          <section className="grid gap-3">
+            <p className="text-xs font-semibold uppercase text-muted-foreground">Perfil</p>
+            <div><Label>Nombre</Label><Input value={name} onChange={(e) => setName(e.target.value)} /></div>
+            <div><Label>Especialidad</Label>
+              <Select value={serviceId} onValueChange={setServiceId}>
+                <SelectTrigger><SelectValue placeholder="Sin especialidad" /></SelectTrigger>
+                <SelectContent>{services.map((s) => <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>)}</SelectContent>
+              </Select>
+            </div>
+            <ImageUpload
+              value={photo || null}
+              onChange={(url) => setPhoto(url ?? "")}
+              carpeta="doctors"
+              entidadId={doctor?.id ?? "nuevo"}
+              nombre={name}
+              etiqueta="Foto del doctor"
+            />
+            <div><Label>Bio</Label><Textarea rows={2} value={bio} onChange={(e) => setBio(e.target.value)} /></div>
+          </section>
+
+          <section className="grid gap-3 border-t pt-4">
+            <p className="text-xs font-semibold uppercase text-muted-foreground">Horario</p>
+            <div>
+              <Label>Dias de trabajo</Label>
+              <div className="mt-2 flex flex-wrap gap-2">
+                {DIAS.map((d) => (
+                  <button
+                    key={d.n}
+                    type="button"
+                    onClick={() => toggleDia(d.n)}
+                    className={`rounded-lg border px-3 py-1.5 text-sm transition ${
+                      days.includes(d.n) ? "border-primary bg-primary text-primary-foreground" : "hover:bg-accent"
+                    }`}
+                  >{d.label}</button>
+                ))}
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div><Label>Entrada</Label><Input type="time" value={start} onChange={(e) => setStart(e.target.value)} /></div>
+              <div><Label>Salida</Label><Input type="time" value={end} onChange={(e) => setEnd(e.target.value)} /></div>
+            </div>
+          </section>
+
+          {doctor && (
+            <section className="grid gap-2 border-t pt-4">
+              <p className="text-xs font-semibold uppercase text-muted-foreground">Acceso al sistema</p>
+              {doctor.userId ? (
+                <p className="text-sm text-emerald-700">Ya tiene cuenta vinculada.</p>
+              ) : (
+                <>
+                  <p className="text-sm text-muted-foreground">
+                    Comparte este enlace para que cree su cuenta y quede vinculada:
+                  </p>
+                  <EnlaceInvitacion tipo="doctor" id={doctor.id} />
+                </>
+              )}
+            </section>
+          )}
+        </div>
+
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>Cancelar</Button>
+          <Button onClick={guardar} disabled={guardando}>{guardando ? "Guardando..." : "Guardar"}</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/** El enlace lleva el id del registro; el trigger handle_new_user lo vincula. */
+function EnlaceInvitacion({ tipo, id }: { tipo: "doctor" | "patient"; id: string }) {
+  const url = typeof window !== "undefined"
+    ? `${window.location.origin}/auth?invite=${tipo}&id=${id}`
+    : "";
+  return (
+    <div className="flex gap-2">
+      <Input readOnly value={url} className="font-mono text-xs" />
+      <Button
+        type="button"
+        variant="outline"
+        onClick={() => {
+          navigator.clipboard.writeText(url);
+          toast.success("Enlace copiado");
+        }}
+      >Copiar</Button>
+    </div>
+  );
+}
+
+/* ============== PACIENTES ============== */
+function PatientsTab() {
+  const { data: patients = [], isLoading } = usePatients();
+  const { data: appointments = [] } = useAppointments();
+  const { data: invoices = [] } = useInvoices();
+  const { data: doctors = [] } = useDoctors();
+
+  const [q, setQ] = useState("");
+  const [seleccionado, setSeleccionado] = useState<Patient | null>(null);
+  const [creando, setCreando] = useState(false);
+
+  const filtered = patients.filter(
+    (p) => p.name.toLowerCase().includes(q.toLowerCase()) || p.phone.includes(q),
+  );
+
+  if (isLoading) return <Cargando />;
 
   return (
     <div className="space-y-4 p-4 md:p-6">
-      <div className="relative max-w-md">
-        <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-        <Input className="pl-9" placeholder="Buscar por nombre o telefono..." value={q} onChange={(e) => setQ(e.target.value)} />
+      <div className="flex flex-wrap items-center gap-3">
+        <div className="relative min-w-0 flex-1 sm:max-w-md">
+          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+          <Input className="pl-9" placeholder="Buscar por nombre o telefono..." value={q} onChange={(e) => setQ(e.target.value)} />
+        </div>
+        <Button onClick={() => setCreando(true)}><Plus className="mr-1 h-4 w-4" /> Nuevo paciente</Button>
       </div>
-      <div className="overflow-hidden rounded-2xl border bg-card shadow-sm">
+
+      <div className="overflow-x-auto rounded-2xl border bg-card shadow-sm">
         <table className="w-full text-sm">
           <thead className="bg-accent/30 text-left text-xs uppercase text-muted-foreground">
             <tr><th className="p-3">Nombre</th><th className="p-3">Telefono</th><th className="p-3">Ultima visita</th><th className="p-3">Balance</th></tr>
           </thead>
           <tbody>
+            {filtered.length === 0 && (
+              <tr><td colSpan={4} className="p-8 text-center text-muted-foreground">Ningun paciente coincide.</td></tr>
+            )}
             {filtered.map((p) => {
               const last = [...appointments].filter((a) => a.patientId === p.id).sort((a, b) => b.date.localeCompare(a.date))[0];
-              const bal = getPatientBalance(p.id, invoices);
+              const bal = saldoPendiente(p.id, invoices);
               return (
-                <tr key={p.id} onClick={() => setSelected(p.id)} className="cursor-pointer border-t transition hover:bg-accent/30">
+                <tr key={p.id} onClick={() => setSeleccionado(p)} className="cursor-pointer border-t transition hover:bg-accent/30">
                   <td className="p-3 font-medium">{p.name}</td>
                   <td className="p-3 text-muted-foreground">{p.phone}</td>
                   <td className="p-3 text-muted-foreground">{last ? formatDate(last.date) : "—"}</td>
@@ -499,110 +854,462 @@ function PatientsTab() {
         </table>
       </div>
 
-      <Dialog open={!!sel} onOpenChange={() => setSelected(null)}>
-        <DialogContent className="max-w-2xl">
-          <DialogHeader><DialogTitle>{sel?.name}</DialogTitle></DialogHeader>
-          {sel && (
-            <div className="space-y-4">
-              <div className="grid grid-cols-2 gap-3 text-sm">
-                <p><span className="text-muted-foreground">Telefono:</span> {sel.phone}</p>
-                <p><span className="text-muted-foreground">Email:</span> {sel.email}</p>
-              </div>
-              <div>
-                <h4 className="mb-2 text-sm font-semibold">Historial de citas</h4>
-                <div className="max-h-60 space-y-2 overflow-y-auto">
-                  {appointments.filter((a) => a.patientId === sel.id).map((a) => {
-                    const doc = doctors.find((d) => d.id === a.doctorId);
-                    return (
-                      <div key={a.id} className="flex items-center justify-between rounded-lg bg-accent/30 p-2 text-xs">
-                        <div>
-                          <p className="font-medium">{formatDate(a.date)} {a.time}</p>
-                          <p className="text-muted-foreground">{doc?.name}</p>
-                        </div>
-                        <span className={`rounded-full px-2 py-0.5 ${statusBadgeClass[a.status]}`}>{statusLabel[a.status]}</span>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            </div>
-          )}
-        </DialogContent>
-      </Dialog>
+      {seleccionado && (
+        <PatientDialog
+          patient={seleccionado}
+          appointments={appointments.filter((a) => a.patientId === seleccionado.id)}
+          invoices={invoices.filter((i) => i.patientId === seleccionado.id)}
+          doctors={doctors}
+          onClose={() => setSeleccionado(null)}
+        />
+      )}
+      {creando && <NewPatientDialog onClose={() => setCreando(false)} />}
     </div>
   );
 }
 
-/* ============== INVOICES ============== */
+function PatientDialog({
+  patient, appointments, invoices, doctors, onClose,
+}: {
+  patient: Patient; appointments: Appointment[]; invoices: Invoice[];
+  doctors: Doctor[]; onClose: () => void;
+}) {
+  const actualizar = useUpdatePatient();
+  const borrar = useDeletePatient();
+  const [editando, setEditando] = useState(false);
+  const [nuevaCita, setNuevaCita] = useState(false);
+  const [confirmarBorrado, setConfirmarBorrado] = useState(false);
+
+  const [name, setName] = useState(patient.name);
+  const [phone, setPhone] = useState(patient.phone);
+  const [email, setEmail] = useState(patient.email);
+  const [birthDate, setBirthDate] = useState(patient.birthDate ?? "");
+  const [photo, setPhoto] = useState<string | null>(patient.photo);
+
+  const balance = saldoPendiente(patient.id, invoices);
+  const completadas = appointments.filter((a) => a.status === "completed").length;
+  const noShows = appointments.filter((a) => a.status === "no_show").length;
+
+  const guardar = async () => {
+    try {
+      await actualizar.mutateAsync({
+        id: patient.id,
+        patch: { name, phone, email, birthDate: birthDate || null, photo },
+      });
+      toast.success("Paciente actualizado");
+      setEditando(false);
+    } catch (e) {
+      toast.error((e as Error).message);
+    }
+  };
+
+  const eliminar = async () => {
+    try {
+      await borrar.mutateAsync(patient.id);
+      toast.success("Paciente eliminado");
+      onClose();
+    } catch (e) {
+      toast.error((e as Error).message);
+    }
+  };
+
+  return (
+    <>
+      <Dialog open onOpenChange={onClose}>
+        <DialogContent className="max-h-[90vh] max-w-2xl overflow-y-auto">
+          <DialogHeader><DialogTitle>{patient.name}</DialogTitle></DialogHeader>
+
+          <div className="grid grid-cols-3 gap-3">
+            <Metrica label="Consultas" value={completadas} />
+            <Metrica label="No-shows" value={noShows} />
+            <Metrica label="Balance" value={formatMoney(balance)} destacado={balance > 0} />
+          </div>
+
+          {editando ? (
+            <div className="grid gap-3 rounded-xl border p-4">
+              <ImageUpload
+                value={photo}
+                onChange={setPhoto}
+                carpeta="patients"
+                entidadId={patient.id}
+                nombre={name}
+                etiqueta="Foto del paciente"
+              />
+              <div><Label>Nombre</Label><Input value={name} onChange={(e) => setName(e.target.value)} /></div>
+              <div className="grid grid-cols-2 gap-3">
+                <div><Label>Telefono</Label><Input value={phone} onChange={(e) => setPhone(e.target.value)} /></div>
+                <div><Label>Nacimiento</Label><Input type="date" value={birthDate} onChange={(e) => setBirthDate(e.target.value)} /></div>
+              </div>
+              <div><Label>Email</Label><Input type="email" value={email} onChange={(e) => setEmail(e.target.value)} /></div>
+              <div className="flex gap-2">
+                <Button size="sm" onClick={guardar} disabled={actualizar.isPending}>Guardar</Button>
+                <Button size="sm" variant="outline" onClick={() => setEditando(false)}>Cancelar</Button>
+              </div>
+            </div>
+          ) : (
+            <div className="grid grid-cols-2 gap-3 rounded-xl bg-accent/20 p-4 text-sm">
+              <p><span className="text-muted-foreground">Telefono:</span> {patient.phone}</p>
+              <p><span className="text-muted-foreground">Email:</span> {patient.email || "—"}</p>
+              <p><span className="text-muted-foreground">Nacimiento:</span> {patient.birthDate ?? "—"}</p>
+              <p><span className="text-muted-foreground">Cuenta:</span> {patient.userId ? "vinculada" : "sin cuenta"}</p>
+            </div>
+          )}
+
+          <div>
+            <h4 className="mb-2 text-sm font-semibold">Historial de citas</h4>
+            <div className="max-h-48 space-y-2 overflow-y-auto">
+              {appointments.length === 0 && <p className="text-xs text-muted-foreground">Sin citas.</p>}
+              {[...appointments].sort((a, b) => b.date.localeCompare(a.date)).map((a) => {
+                const doc = doctors.find((d) => d.id === a.doctorId);
+                return (
+                  <div key={a.id} className="flex items-center justify-between rounded-lg bg-accent/30 p-2 text-xs">
+                    <div>
+                      <p className="font-medium">{formatDate(a.date)} {a.time}</p>
+                      <p className="text-muted-foreground">{doc?.name}</p>
+                    </div>
+                    <span className={`rounded-full px-2 py-0.5 ${statusBadgeClass[a.status]}`}>{statusLabel[a.status]}</span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          <div>
+            <h4 className="mb-2 text-sm font-semibold">Cobros</h4>
+            <div className="max-h-40 space-y-2 overflow-y-auto">
+              {invoices.length === 0 && <p className="text-xs text-muted-foreground">Sin cobros.</p>}
+              {invoices.map((i) => (
+                <div key={i.id} className="flex items-center justify-between rounded-lg bg-accent/30 p-2 text-xs">
+                  <span className="font-medium">{formatMoney(i.amount)}</span>
+                  <span className={`rounded-full px-2 py-0.5 ${invoiceBadgeClass[i.status]}`}>{i.status}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {!patient.userId && (
+            <div className="grid gap-2 border-t pt-4">
+              <p className="text-xs font-semibold uppercase text-muted-foreground">Acceso al portal</p>
+              <EnlaceInvitacion tipo="patient" id={patient.id} />
+            </div>
+          )}
+
+          <DialogFooter className="flex-wrap gap-2 sm:justify-between">
+            <Button variant="ghost" className="text-rose-600" onClick={() => setConfirmarBorrado(true)}>
+              <Trash2 className="mr-1 h-4 w-4" /> Eliminar
+            </Button>
+            <div className="flex gap-2">
+              {!editando && <Button variant="outline" onClick={() => setEditando(true)}><Pencil className="mr-1 h-4 w-4" /> Editar</Button>}
+              <Button onClick={() => setNuevaCita(true)}><Plus className="mr-1 h-4 w-4" /> Crear Cita</Button>
+            </div>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {nuevaCita && <NewAppointmentDialog pacienteFijo={patient} onClose={() => setNuevaCita(false)} />}
+
+      <Dialog open={confirmarBorrado} onOpenChange={() => setConfirmarBorrado(false)}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Eliminar a {patient.name}?</DialogTitle>
+            <DialogDescription>Se borraran sus citas y cobros. No se puede deshacer.</DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setConfirmarBorrado(false)}>Volver</Button>
+            <Button variant="destructive" disabled={borrar.isPending} onClick={eliminar}>Eliminar</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
+  );
+}
+
+function Metrica({ label, value, destacado }: { label: string; value: number | string; destacado?: boolean }) {
+  return (
+    <div className="rounded-xl border bg-card p-3 text-center">
+      <p className="text-xs text-muted-foreground">{label}</p>
+      <p className={`mt-1 text-lg font-bold ${destacado ? "text-rose-600" : ""}`}>{value}</p>
+    </div>
+  );
+}
+
+function NewPatientDialog({ onClose }: { onClose: () => void }) {
+  const { data: clinic } = useClinic();
+  const crear = useCreatePatient();
+  const [name, setName] = useState("");
+  const [phone, setPhone] = useState("");
+  const [email, setEmail] = useState("");
+  const [birthDate, setBirthDate] = useState("");
+
+  const guardar = async () => {
+    if (!clinic) return;
+    if (!name.trim() || !phone.trim()) { toast.error("Nombre y telefono son obligatorios"); return; }
+    try {
+      await crear.mutateAsync({ clinicId: clinic.id, name, phone, email, birthDate: birthDate || null });
+      toast.success("Paciente creado");
+      onClose();
+    } catch (e) {
+      toast.error((e as Error).message);
+    }
+  };
+
+  return (
+    <Dialog open onOpenChange={onClose}>
+      <DialogContent>
+        <DialogHeader><DialogTitle>Nuevo paciente</DialogTitle></DialogHeader>
+        <div className="grid gap-3">
+          <div><Label>Nombre</Label><Input value={name} onChange={(e) => setName(e.target.value)} /></div>
+          <div className="grid grid-cols-2 gap-3">
+            <div><Label>Telefono</Label><Input value={phone} onChange={(e) => setPhone(e.target.value)} /></div>
+            <div><Label>Nacimiento</Label><Input type="date" value={birthDate} onChange={(e) => setBirthDate(e.target.value)} /></div>
+          </div>
+          <div><Label>Email</Label><Input type="email" value={email} onChange={(e) => setEmail(e.target.value)} /></div>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>Cancelar</Button>
+          <Button onClick={guardar} disabled={crear.isPending}>Crear</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/* ============== COBROS ============== */
 function InvoicesTab() {
-  const { invoices, appointments, patients, doctors, specialties } = useStore();
-  const [status, setStatus] = useState<string>("all");
-  const [doctorId, setDoctorId] = useState<string>("all");
+  const { data: invoices = [], isLoading } = useInvoices();
+  const { data: appointments = [] } = useAppointments();
+  const { data: patients = [] } = usePatients();
+  const { data: doctors = [] } = useDoctors();
+  const { data: services = [] } = useServices();
+  const marcarPagado = useMarkInvoicePaid();
+  const cancelar = useCancelInvoice();
+
+  const [status, setStatus] = useState("all");
+  const [doctorId, setDoctorId] = useState("all");
+  const [desde, setDesde] = useState("");
+  const [hasta, setHasta] = useState("");
+  const [cobrando, setCobrando] = useState<string | null>(null);
+  const [nuevoCobro, setNuevoCobro] = useState(false);
 
   const filtered = invoices.filter((i) => {
     if (status !== "all" && i.status !== status) return false;
     const apt = appointments.find((a) => a.id === i.appointmentId);
     if (doctorId !== "all" && apt?.doctorId !== doctorId) return false;
+    const fecha = i.createdAt.slice(0, 10);
+    if (desde && fecha < desde) return false;
+    if (hasta && fecha > hasta) return false;
     return true;
   });
 
+  const total = filtered.filter((i) => i.status === "paid").reduce((s, i) => s + i.amount, 0);
+
+  const pagar = async (id: string, method: PaymentMethod) => {
+    try {
+      await marcarPagado.mutateAsync({ id, method });
+      toast.success("Cobro marcado como pagado");
+      setCobrando(null);
+    } catch (e) {
+      toast.error((e as Error).message);
+    }
+  };
+
+  if (isLoading) return <Cargando />;
+
   return (
     <div className="space-y-4 p-4 md:p-6">
-      <div className="flex flex-wrap gap-3">
-        <Select value={status} onValueChange={setStatus}>
-          <SelectTrigger className="w-40"><SelectValue /></SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">Todos</SelectItem>
-            <SelectItem value="paid">Pagados</SelectItem>
-            <SelectItem value="pending">Pendientes</SelectItem>
-            <SelectItem value="cancelled">Cancelados</SelectItem>
-          </SelectContent>
-        </Select>
-        <Select value={doctorId} onValueChange={setDoctorId}>
-          <SelectTrigger className="w-56"><SelectValue /></SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">Todos los doctores</SelectItem>
-            {doctors.map((d) => <SelectItem key={d.id} value={d.id}>{d.name}</SelectItem>)}
-          </SelectContent>
-        </Select>
+      <div className="flex flex-wrap items-end gap-3">
+        <div>
+          <Label className="text-xs">Estado</Label>
+          <Select value={status} onValueChange={setStatus}>
+            <SelectTrigger className="w-36"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">Todos</SelectItem>
+              <SelectItem value="paid">Pagados</SelectItem>
+              <SelectItem value="pending">Pendientes</SelectItem>
+              <SelectItem value="cancelled">Cancelados</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+        <div>
+          <Label className="text-xs">Doctor</Label>
+          <Select value={doctorId} onValueChange={setDoctorId}>
+            <SelectTrigger className="w-52"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">Todos los doctores</SelectItem>
+              {doctors.map((d) => <SelectItem key={d.id} value={d.id}>{d.name}</SelectItem>)}
+            </SelectContent>
+          </Select>
+        </div>
+        {/* Hueco 4 de ESTADO.md: el filtro por rango de fechas faltaba */}
+        <div><Label className="text-xs">Desde</Label><Input type="date" className="w-40" value={desde} onChange={(e) => setDesde(e.target.value)} /></div>
+        <div><Label className="text-xs">Hasta</Label><Input type="date" className="w-40" value={hasta} onChange={(e) => setHasta(e.target.value)} /></div>
+        {(desde || hasta || status !== "all" || doctorId !== "all") && (
+          <Button variant="ghost" size="sm" onClick={() => { setDesde(""); setHasta(""); setStatus("all"); setDoctorId("all"); }}>
+            Limpiar
+          </Button>
+        )}
+        <Button size="sm" className="ml-auto" onClick={() => setNuevoCobro(true)}><Plus className="mr-1 h-4 w-4" /> Nuevo cobro</Button>
       </div>
+
+      <p className="text-sm text-muted-foreground">
+        {filtered.length} cobros · cobrado <span className="font-semibold text-foreground">{formatMoney(total)}</span>
+      </p>
+
       <div className="overflow-x-auto rounded-2xl border bg-card shadow-sm">
         <table className="w-full text-sm">
           <thead className="bg-accent/30 text-left text-xs uppercase text-muted-foreground">
             <tr>
               <th className="p-3">Fecha</th><th className="p-3">Paciente</th><th className="p-3">Doctor</th>
-              <th className="p-3">Servicio</th><th className="p-3">Monto</th><th className="p-3">Estado</th><th className="p-3">Metodo</th>
+              <th className="p-3">Servicio</th><th className="p-3">Monto</th><th className="p-3">Estado</th>
+              <th className="p-3">Metodo</th><th className="p-3"></th>
             </tr>
           </thead>
           <tbody>
+            {filtered.length === 0 && (
+              <tr><td colSpan={8} className="p-8 text-center text-muted-foreground">Ningun cobro con esos filtros.</td></tr>
+            )}
             {filtered.map((i) => {
               const apt = appointments.find((a) => a.id === i.appointmentId);
               const pat = patients.find((p) => p.id === i.patientId);
               const doc = doctors.find((d) => d.id === apt?.doctorId);
-              const sp = specialties.find((s) => s.id === apt?.specialtyId);
+              const sp = services.find((s) => s.id === apt?.serviceId);
               return (
                 <tr key={i.id} className="border-t">
-                  <td className="p-3">{i.createdAt}</td>
+                  <td className="p-3">{i.createdAt.slice(0, 10)}</td>
                   <td className="p-3 font-medium">{pat?.name}</td>
                   <td className="p-3 text-muted-foreground">{doc?.name || "—"}</td>
                   <td className="p-3 text-muted-foreground">{sp?.name || "—"}</td>
                   <td className="p-3 font-semibold">{formatMoney(i.amount)}</td>
                   <td className="p-3"><span className={`rounded-full px-2 py-0.5 text-xs ${invoiceBadgeClass[i.status]}`}>{i.status}</span></td>
                   <td className="p-3 capitalize text-muted-foreground">{i.method || "—"}</td>
+                  <td className="p-3">
+                    {i.status === "pending" && (
+                      <div className="flex gap-1">
+                        <Button size="sm" variant="outline" onClick={() => setCobrando(i.id)}>Cobrar</Button>
+                        <Button size="sm" variant="ghost" className="text-muted-foreground" onClick={() => cancelar.mutate(i.id)}>Anular</Button>
+                      </div>
+                    )}
+                  </td>
                 </tr>
               );
             })}
           </tbody>
         </table>
       </div>
+
+      <Dialog open={!!cobrando} onOpenChange={() => setCobrando(null)}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader><DialogTitle>Registrar pago</DialogTitle></DialogHeader>
+          <p className="text-sm text-muted-foreground">Como pago el paciente?</p>
+          <div className="grid gap-2">
+            {(["efectivo", "tarjeta", "transferencia"] as PaymentMethod[]).map((m) => (
+              <Button key={m} variant="outline" className="justify-start capitalize"
+                disabled={marcarPagado.isPending}
+                onClick={() => cobrando && pagar(cobrando, m)}>
+                {m}
+              </Button>
+            ))}
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {nuevoCobro && <NewInvoiceDialog onClose={() => setNuevoCobro(false)} />}
     </div>
   );
 }
 
-/* ============== REPORTS ============== */
+function NewInvoiceDialog({ onClose }: { onClose: () => void }) {
+  const { data: clinic } = useClinic();
+  const { data: patients = [] } = usePatients();
+  const { data: appointments = [] } = useAppointments();
+  const crear = useCreateInvoice();
+
+  const [patientId, setPatientId] = useState("");
+  const [appointmentId, setAppointmentId] = useState<string>("");
+  const [amount, setAmount] = useState(0);
+  const [method, setMethod] = useState<PaymentMethod | "pendiente">("efectivo");
+  const [notes, setNotes] = useState("");
+
+  const citasDelPaciente = appointments.filter((a) => a.patientId === patientId);
+
+  const guardar = async () => {
+    if (!clinic) return;
+    if (!patientId || amount <= 0) { toast.error("Elige paciente y monto"); return; }
+    try {
+      await crear.mutateAsync({
+        clinicId: clinic.id,
+        patientId,
+        appointmentId: appointmentId || null,
+        amount,
+        method: method === "pendiente" ? null : method,
+        notes,
+      });
+      toast.success(method === "pendiente" ? "Cobro pendiente creado" : "Cobro registrado");
+      onClose();
+    } catch (e) {
+      toast.error((e as Error).message);
+    }
+  };
+
+  return (
+    <Dialog open onOpenChange={onClose}>
+      <DialogContent>
+        <DialogHeader><DialogTitle>Nuevo cobro</DialogTitle></DialogHeader>
+        <div className="grid gap-3">
+          <div><Label>Paciente</Label>
+            <Select value={patientId} onValueChange={(v) => { setPatientId(v); setAppointmentId(""); }}>
+              <SelectTrigger><SelectValue placeholder="Elige un paciente" /></SelectTrigger>
+              <SelectContent>{patients.map((p) => <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>)}</SelectContent>
+            </Select>
+          </div>
+          {patientId && citasDelPaciente.length > 0 && (
+            <div><Label>Cita asociada (opcional)</Label>
+              <Select value={appointmentId} onValueChange={setAppointmentId}>
+                <SelectTrigger><SelectValue placeholder="Sin cita" /></SelectTrigger>
+                <SelectContent>
+                  {citasDelPaciente.map((a) => (
+                    <SelectItem key={a.id} value={a.id}>{formatDate(a.date)} {a.time}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
+          <div><Label>Monto (MXN)</Label><Input type="number" value={amount} onChange={(e) => setAmount(Number(e.target.value))} /></div>
+          <div><Label>Metodo</Label>
+            <Select value={method} onValueChange={(v) => setMethod(v as PaymentMethod | "pendiente")}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="efectivo">Efectivo</SelectItem>
+                <SelectItem value="tarjeta">Tarjeta</SelectItem>
+                <SelectItem value="transferencia">Transferencia</SelectItem>
+                <SelectItem value="pendiente">Dejar pendiente</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <div><Label>Notas</Label><Textarea rows={2} value={notes} onChange={(e) => setNotes(e.target.value)} /></div>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>Cancelar</Button>
+          <Button onClick={guardar} disabled={crear.isPending}>Guardar</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/* ============== REPORTES ============== */
 function ReportsTab() {
-  const { invoices, appointments, doctors } = useStore();
-  const monthIncome = invoices.filter((i) => i.status === "paid").reduce((s, i) => s + i.amount, 0);
+  const { data: invoices = [], isLoading } = useInvoices();
+  const { data: appointments = [] } = useAppointments();
+  const { data: doctors = [] } = useDoctors();
+
+  const desdeMes = inicioDeMes();
+
+  // Bug B4: antes sumaba TODO el historico bajo la etiqueta "del mes"
+  const monthIncome = invoices
+    .filter((i) => i.status === "paid" && i.paidAt && i.paidAt >= desdeMes)
+    .reduce((s, i) => s + i.amount, 0);
+
   const total = appointments.length;
   const noShows = appointments.filter((a) => a.status === "no_show").length;
   const rate = total ? Math.round((noShows / total) * 100) : 0;
@@ -616,21 +1323,27 @@ function ReportsTab() {
   appointments.forEach((a) => { const h = a.time.slice(0, 2); hourCount[h] = (hourCount[h] || 0) + 1; });
   const topHour = Object.entries(hourCount).sort((a, b) => b[1] - a[1])[0]?.[0];
 
-  const weeks: { week: string; amount: number }[] = [];
-  for (let i = 3; i >= 0; i--) {
-    const start = new Date(); start.setDate(start.getDate() - i * 7 - 6);
-    const end = new Date(); end.setDate(end.getDate() - i * 7);
-    const sIso = start.toISOString().slice(0, 10);
-    const eIso = end.toISOString().slice(0, 10);
-    const amt = invoices.filter((iv) => iv.status === "paid" && iv.paidAt && iv.paidAt >= sIso && iv.paidAt <= eIso).reduce((s, x) => s + x.amount, 0);
-    weeks.push({ week: `Sem ${4 - i}`, amount: amt });
-  }
+  const weeks = useMemo(() => {
+    const out: { week: string; amount: number }[] = [];
+    const hoy = todayISO();
+    for (let i = 3; i >= 0; i--) {
+      const fin = sumarDias(hoy, -i * 7);
+      const ini = sumarDias(fin, -6);
+      const amt = invoices
+        .filter((iv) => iv.status === "paid" && iv.paidAt && iv.paidAt >= ini && iv.paidAt <= fin)
+        .reduce((s, x) => s + x.amount, 0);
+      out.push({ week: `Sem ${4 - i}`, amount: amt });
+    }
+    return out;
+  }, [invoices]);
 
   const pieData = [
     { name: "Completadas", value: appointments.filter((a) => a.status === "completed").length, color: "oklch(0.70 0.17 150)" },
     { name: "No-shows", value: noShows, color: "oklch(0.62 0.22 25)" },
     { name: "Canceladas", value: appointments.filter((a) => a.status === "cancelled").length, color: "oklch(0.65 0.03 250)" },
   ];
+
+  if (isLoading) return <Cargando />;
 
   return (
     <div className="space-y-6 p-4 md:p-6">
@@ -664,7 +1377,9 @@ function ReportsTab() {
           </div>
           <div className="mt-2 flex flex-wrap justify-center gap-3 text-xs">
             {pieData.map((d) => (
-              <span key={d.name} className="flex items-center gap-1"><span className="h-2 w-2 rounded-full" style={{ background: d.color }} />{d.name}: {d.value}</span>
+              <span key={d.name} className="flex items-center gap-1">
+                <span className="h-2 w-2 rounded-full" style={{ background: d.color }} />{d.name}: {d.value}
+              </span>
             ))}
           </div>
         </div>
@@ -673,25 +1388,222 @@ function ReportsTab() {
   );
 }
 
-/* ============== CONFIG ============== */
-function ConfigTab() {
-  const { clinic, updateClinic } = useStore();
-  const [form, setForm] = useState(clinic);
-  const save = () => { updateClinic(form); toast.success("Configuracion guardada"); };
+/* ============== CONFIGURACION ============== */
+function ConfigTab({ onRelanzarWizard }: { onRelanzarWizard: () => void }) {
+  const { data: clinic, isLoading } = useClinic();
+  const actualizar = useUpdateClinic();
+  const [form, setForm] = useState<Clinic | null>(null);
+
+  const valores = form ?? clinic ?? null;
+
+  const guardar = async () => {
+    if (!clinic || !valores) return;
+    try {
+      await actualizar.mutateAsync({ id: clinic.id, patch: valores });
+      toast.success("Configuracion guardada");
+    } catch (e) {
+      toast.error((e as Error).message);
+    }
+  };
+
+  if (isLoading || !valores) return <Cargando />;
+
   return (
-    <div className="p-4 md:p-6">
+    <div className="space-y-6 p-4 md:p-6">
       <div className="max-w-2xl rounded-2xl border bg-card p-6 shadow-sm">
         <h3 className="mb-4 font-semibold">Datos de la clinica</h3>
-        <div className="grid gap-3 sm:grid-cols-2">
-          <div className="sm:col-span-2"><Label>Nombre</Label><Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /></div>
-          <div className="sm:col-span-2"><Label>Direccion</Label><Input value={form.address} onChange={(e) => setForm({ ...form, address: e.target.value })} /></div>
-          <div><Label>Telefono</Label><Input value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} /></div>
-          <div><Label>Email</Label><Input value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} /></div>
-          <div><Label>Apertura</Label><Input type="time" value={form.openTime} onChange={(e) => setForm({ ...form, openTime: e.target.value })} /></div>
-          <div><Label>Cierre</Label><Input type="time" value={form.closeTime} onChange={(e) => setForm({ ...form, closeTime: e.target.value })} /></div>
+        <div className="mb-4">
+          <ImageUpload
+            value={valores.logo}
+            onChange={(url) => setForm({ ...valores, logo: url })}
+            carpeta="clinics"
+            entidadId={valores.id}
+            nombre={valores.name}
+            forma="cuadrado"
+            etiqueta="Logo de la clinica"
+          />
         </div>
-        <Button onClick={save} className="mt-4">Guardar</Button>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <div className="sm:col-span-2"><Label>Nombre</Label><Input value={valores.name} onChange={(e) => setForm({ ...valores, name: e.target.value })} /></div>
+          <div className="sm:col-span-2"><Label>Direccion</Label><Input value={valores.address} onChange={(e) => setForm({ ...valores, address: e.target.value })} /></div>
+          <div><Label>Telefono</Label><Input value={valores.phone} onChange={(e) => setForm({ ...valores, phone: e.target.value })} /></div>
+          <div><Label>Email</Label><Input value={valores.email} onChange={(e) => setForm({ ...valores, email: e.target.value })} /></div>
+          <div><Label>Apertura</Label><Input type="time" value={valores.openTime} onChange={(e) => setForm({ ...valores, openTime: e.target.value })} /></div>
+          <div><Label>Cierre</Label><Input type="time" value={valores.closeTime} onChange={(e) => setForm({ ...valores, closeTime: e.target.value })} /></div>
+        </div>
+        <Button onClick={guardar} className="mt-4" disabled={actualizar.isPending}>
+          {actualizar.isPending ? "Guardando..." : "Guardar"}
+        </Button>
       </div>
+
+      <ServiciosEditables />
+
+      <div className="max-w-2xl rounded-2xl border bg-card p-6 shadow-sm">
+        <h3 className="font-semibold">Asistente de puesta en marcha</h3>
+        <p className="mt-1 text-xs text-muted-foreground">
+          Repasa los datos de la clinica, doctores y servicios paso a paso.
+        </p>
+        <Button variant="outline" className="mt-3" onClick={onRelanzarWizard}>
+          Volver a ejecutarlo
+        </Button>
+      </div>
+
+      <ResetDemo />
+    </div>
+  );
+}
+
+/**
+ * Reset de la demo, que pide el PRD.
+ *
+ * No borra nada: recoloca las citas y cobros del seed sobre el dia de hoy.
+ * Las reservas hechas durante la demo se quedan, y se avisa de ello.
+ */
+function ResetDemo() {
+  const reset = useResetDemoData();
+  const [confirmar, setConfirmar] = useState(false);
+
+  const ejecutar = async () => {
+    try {
+      const mensaje = await reset.mutateAsync();
+      toast.success(mensaje);
+      setConfirmar(false);
+    } catch (e) {
+      toast.error((e as Error).message);
+    }
+  };
+
+  return (
+    <div className="max-w-2xl rounded-2xl border bg-card p-6 shadow-sm">
+      <h3 className="font-semibold">Datos de demostracion</h3>
+      <p className="mt-1 text-xs text-muted-foreground">
+        Devuelve las citas y cobros de ejemplo al dia de hoy. Util cuando la demo lleva
+        dias sin usarse y la agenda aparece vacia.
+      </p>
+      <Button variant="outline" className="mt-3" onClick={() => setConfirmar(true)}>
+        <RotateCcw className="mr-1 h-4 w-4" /> Restablecer demo
+      </Button>
+
+      <Dialog open={confirmar} onOpenChange={() => setConfirmar(false)}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Restablecer los datos de demostracion?</DialogTitle>
+            <DialogDescription asChild>
+              <div className="space-y-2 text-sm">
+                <p>Las 10 citas y 3 cobros de ejemplo vuelven a su estado inicial,
+                  recolocados sobre hoy.</p>
+                <p className="text-muted-foreground">
+                  Las citas y pacientes creados despues <strong>no se tocan</strong>.
+                </p>
+              </div>
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setConfirmar(false)}>Cancelar</Button>
+            <Button onClick={ejecutar} disabled={reset.isPending}>
+              {reset.isPending ? "Restableciendo..." : "Restablecer"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}
+
+/** Hueco 5 de ESTADO.md: los servicios y sus precios no eran editables. */
+function ServiciosEditables() {
+  const { data: clinic } = useClinic();
+  const { data: services = [] } = useServices();
+  const crear = useCreateService();
+  const actualizar = useUpdateService();
+  const borrar = useDeleteService();
+
+  const [editando, setEditando] = useState<Service | null>(null);
+  const [creando, setCreando] = useState(false);
+
+  const vacio: Omit<Service, "id" | "active"> = {
+    clinicId: clinic?.id ?? "",
+    name: "",
+    duration: 30,
+    price: 0,
+    description: "",
+    icon: "Stethoscope",
+  };
+  const [form, setForm] = useState(vacio);
+
+  const abrirCrear = () => { setForm({ ...vacio, clinicId: clinic?.id ?? "" }); setCreando(true); };
+  const abrirEditar = (s: Service) => {
+    setForm({ clinicId: s.clinicId, name: s.name, duration: s.duration, price: s.price, description: s.description, icon: s.icon });
+    setEditando(s);
+  };
+
+  const guardar = async () => {
+    if (!form.name.trim()) { toast.error("Falta el nombre"); return; }
+    if (form.duration <= 0) { toast.error("La duracion debe ser mayor que cero"); return; }
+    try {
+      if (editando) {
+        await actualizar.mutateAsync({ id: editando.id, patch: form });
+        toast.success("Servicio actualizado");
+      } else {
+        await crear.mutateAsync(form);
+        toast.success("Servicio creado");
+      }
+      setEditando(null); setCreando(false);
+    } catch (e) {
+      toast.error((e as Error).message);
+    }
+  };
+
+  const eliminar = async (s: Service) => {
+    try {
+      await borrar.mutateAsync(s.id);
+      toast.success("Servicio eliminado");
+    } catch (e) {
+      toast.error((e as Error).message);
+    }
+  };
+
+  return (
+    <div className="max-w-2xl rounded-2xl border bg-card p-6 shadow-sm">
+      <div className="mb-4 flex items-center justify-between">
+        <div>
+          <h3 className="font-semibold">Servicios y precios</h3>
+          <p className="text-xs text-muted-foreground">La duracion define el bloque que ocupa en agenda.</p>
+        </div>
+        <Button size="sm" onClick={abrirCrear}><Plus className="mr-1 h-4 w-4" /> Añadir</Button>
+      </div>
+
+      <div className="space-y-2">
+        {services.map((s) => (
+          <div key={s.id} className="flex items-center gap-3 rounded-xl border p-3">
+            <div className="min-w-0 flex-1">
+              <p className="truncate font-medium">{s.name}</p>
+              <p className="text-xs text-muted-foreground">{s.duration} min · {formatMoney(s.price)}</p>
+            </div>
+            <Button size="sm" variant="ghost" onClick={() => abrirEditar(s)}><Pencil className="h-3.5 w-3.5" /></Button>
+            <Button size="sm" variant="ghost" className="text-rose-600" onClick={() => eliminar(s)}><Trash2 className="h-3.5 w-3.5" /></Button>
+          </div>
+        ))}
+      </div>
+
+      <Dialog open={creando || !!editando} onOpenChange={() => { setCreando(false); setEditando(null); }}>
+        <DialogContent>
+          <DialogHeader><DialogTitle>{editando ? "Editar servicio" : "Nuevo servicio"}</DialogTitle></DialogHeader>
+          <div className="grid gap-3">
+            <div><Label>Nombre</Label><Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /></div>
+            <div className="grid grid-cols-2 gap-3">
+              <div><Label>Duracion (min)</Label><Input type="number" value={form.duration} onChange={(e) => setForm({ ...form, duration: Number(e.target.value) })} /></div>
+              <div><Label>Precio (MXN)</Label><Input type="number" value={form.price} onChange={(e) => setForm({ ...form, price: Number(e.target.value) })} /></div>
+            </div>
+            <div><Label>Descripcion</Label><Input value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></div>
+            <div><Label>Icono (Lucide)</Label><Input value={form.icon} onChange={(e) => setForm({ ...form, icon: e.target.value })} placeholder="Stethoscope" /></div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => { setCreando(false); setEditando(null); }}>Cancelar</Button>
+            <Button onClick={guardar} disabled={crear.isPending || actualizar.isPending}>Guardar</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

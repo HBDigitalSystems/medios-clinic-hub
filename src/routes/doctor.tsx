@@ -1,21 +1,37 @@
 import { createFileRoute, useNavigate, Link } from "@tanstack/react-router";
-import { useState, useMemo } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
-import { Stethoscope, LogOut, Play, XCircle, Clock, User, Check, DollarSign, Calendar } from "lucide-react";
+import { Stethoscope, LogOut, Play, XCircle, Clock, User, Check, DollarSign, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { useStore } from "@/lib/store";
-import { statusBadgeClass, statusLabel, formatDate, formatMoney, todayISO, ageFromBirth } from "@/lib/medi-utils";
-import type { PaymentMethod } from "@/lib/types";
+import { useAuth } from "@/lib/auth";
+import { ProtectedRoute } from "@/components/auth/protected-route";
+import { MiPerfilDoctor } from "@/components/auth/mi-perfil-dialog";
+import { useDoctorByUserId } from "@/lib/api/doctors";
+import { useServices } from "@/lib/api/services";
+import { usePatients } from "@/lib/api/patients";
+import { useAppointments, useTransitionAppointment } from "@/lib/api/appointments";
+import { useAppointmentNote, useSaveAppointmentNote } from "@/lib/api/notes";
+import { useCreateInvoice } from "@/lib/api/invoices";
+import type { Appointment, Doctor, Patient, PaymentMethod, Service } from "@/lib/api/types";
+import { statusBadgeClass, statusLabel, formatDate, todayISO, ageFromBirth } from "@/lib/medi-utils";
 
 export const Route = createFileRoute("/doctor")({
-  head: () => ({ meta: [{ title: "Panel Doctor - MediOS" }] }),
-  component: DoctorPanel,
+  head: () => ({ meta: [{ title: "Panel Doctor - DoctorCita Clinica" }] }),
+  component: DoctorRoute,
 });
+
+function DoctorRoute() {
+  return (
+    <ProtectedRoute allow="doctor">
+      <DoctorPanel />
+    </ProtectedRoute>
+  );
+}
 
 const TABS = [
   { key: "day", label: "Mi Dia" },
@@ -24,18 +40,46 @@ const TABS = [
 ] as const;
 type Tab = typeof TABS[number]["key"];
 
+/** La edad solo se muestra si hay fecha de nacimiento (en la base es opcional). */
+const edadTexto = (p: Patient | undefined) =>
+  p?.birthDate ? `${ageFromBirth(p.birthDate)} anos` : "";
+
 function DoctorPanel() {
   const navigate = useNavigate();
-  const { currentUser, doctors, setCurrentUser } = useStore();
+  const { user, signOut } = useAuth();
   const [tab, setTab] = useState<Tab>("day");
+  const [perfilAbierto, setPerfilAbierto] = useState(false);
 
-  // pick a doctor: current user if doctor, else first
-  const doctorId = currentUser?.role === "doctor" ? currentUser.id : doctors[0]?.id;
-  const doctor = doctors.find((d) => d.id === doctorId);
+  // El registro `doctors` se resuelve por user_id: es lo que ata la cuenta
+  // con la ficha profesional y permite filtrar SUS citas.
+  const { data: doctor, isLoading } = useDoctorByUserId(user?.id);
 
-  const logout = () => { setCurrentUser(null); navigate({ to: "/auth" }); };
+  const logout = async () => { await signOut(); navigate({ to: "/auth" }); };
 
-  if (!doctor) return null;
+  if (isLoading) {
+    return (
+      <div className="grid min-h-screen place-items-center bg-accent/10">
+        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
+
+  // Cuenta con rol doctor pero sin ficha vinculada: pasa si un admin borra
+  // el registro o si la invitacion no llego a completarse.
+  if (!doctor) {
+    return (
+      <div className="grid min-h-screen place-items-center bg-accent/10 p-4">
+        <div className="max-w-sm rounded-2xl border bg-card p-8 text-center shadow-sm">
+          <Stethoscope className="mx-auto h-10 w-10 text-muted-foreground/50" />
+          <h1 className="mt-4 text-lg font-bold">Tu cuenta no esta vinculada</h1>
+          <p className="mt-1 text-sm text-muted-foreground">
+            No encontramos tu ficha de doctor. Pide a la clinica que te envie una invitacion.
+          </p>
+          <Button variant="outline" className="mt-5 w-full" onClick={logout}>Salir</Button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-accent/10">
@@ -48,7 +92,18 @@ function DoctorPanel() {
               <p className="truncate text-xs text-muted-foreground">Panel del Doctor</p>
             </div>
           </Link>
-          <Button variant="ghost" size="sm" onClick={logout}><LogOut className="h-4 w-4" /></Button>
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => setPerfilAbierto(true)}
+              title="Mi perfil"
+              className="grid h-9 w-9 place-items-center overflow-hidden rounded-full border bg-accent/40 transition hover:border-primary"
+            >
+              {doctor.photo
+                ? <img src={doctor.photo} alt={doctor.name} className="h-full w-full object-cover" />
+                : <User className="h-4 w-4 text-muted-foreground" />}
+            </button>
+            <Button variant="ghost" size="sm" onClick={logout}><LogOut className="h-4 w-4" /></Button>
+          </div>
         </div>
         <div className="mx-auto max-w-6xl px-2">
           <div className="flex overflow-x-auto">
@@ -65,58 +120,79 @@ function DoctorPanel() {
         </div>
       </header>
       <main className="mx-auto max-w-6xl px-4 py-6">
-        {tab === "day" && <MyDay doctorId={doctor.id} onStart={() => setTab("consult")} />}
-        {tab === "consult" && <Consultation doctorId={doctor.id} />}
-        {tab === "patients" && <MyPatients doctorId={doctor.id} />}
+        {tab === "day" && <MyDay doctor={doctor} onStart={() => setTab("consult")} />}
+        {tab === "consult" && <Consultation doctor={doctor} />}
+        {tab === "patients" && <MyPatients doctor={doctor} />}
       </main>
+
+      {perfilAbierto && <MiPerfilDoctor doctor={doctor} onClose={() => setPerfilAbierto(false)} />}
     </div>
   );
 }
 
-function MyDay({ doctorId, onStart }: { doctorId: string; onStart: () => void }) {
-  const { appointments, patients, specialties, updateAppointmentStatus } = useStore();
+/* ================= MI DIA ================= */
+function MyDay({ doctor, onStart }: { doctor: Doctor; onStart: () => void }) {
+  // RLS ya limita las citas a las del doctor logueado; el filtro por id
+  // es explicito para que el componente no dependa de eso.
+  const { data: appointments = [], isLoading } = useAppointments();
+  const { data: patients = [] } = usePatients();
+  const transition = useTransitionAppointment();
+
   const today = todayISO();
-  const dayApts = appointments.filter((a) => a.doctorId === doctorId && a.date === today).sort((a, b) => a.time.localeCompare(b.time));
+  const dayApts = appointments
+    .filter((a) => a.doctorId === doctor.id && a.date === today)
+    .sort((a, b) => a.time.localeCompare(b.time));
 
   const next = dayApts.find((a) => a.status === "confirmed" || a.status === "scheduled");
 
-  const start = (id: string) => {
-    const apt = appointments.find((a) => a.id === id);
-    if (apt?.status === "scheduled") {
-      updateAppointmentStatus(id, "confirmed");
+  const start = async (apt: Appointment) => {
+    try {
+      // scheduled no salta directo a in_progress: hay que pasar por confirmed
+      if (apt.status === "scheduled") {
+        await transition.mutateAsync({ id: apt.id, desde: "scheduled", hasta: "confirmed" });
+      }
+      await transition.mutateAsync({ id: apt.id, desde: "confirmed", hasta: "in_progress" });
+      toast.success("Consulta iniciada");
+      onStart();
+    } catch (e) {
+      toast.error((e as Error).message);
     }
-    const r = updateAppointmentStatus(id, "in_progress");
-    if (!r.ok) { toast.error(r.error || "Error"); return; }
-    toast.success("Consulta iniciada");
-    onStart();
   };
 
-  const noShow = (id: string) => {
-    const r = updateAppointmentStatus(id, "no_show");
-    if (!r.ok) toast.error(r.error || "Error"); else toast.success("Marcada como no-show");
+  const noShow = async (apt: Appointment) => {
+    try {
+      await transition.mutateAsync({ id: apt.id, desde: apt.status, hasta: "no_show" });
+      toast.success("Marcada como no-show");
+    } catch (e) {
+      toast.error((e as Error).message);
+    }
   };
+
+  if (isLoading) return <Cargando />;
 
   return (
     <div className="space-y-6">
       {next && (() => {
         const pat = patients.find((p) => p.id === next.patientId);
-        const sp = specialties.find((s) => s.id === next.specialtyId);
         const prior = appointments.filter((a) => a.patientId === pat?.id && a.status === "completed").length;
         return (
           <div className="rounded-3xl border-2 border-primary bg-card p-6 shadow-md">
             <p className="text-xs font-semibold uppercase text-primary">Proximo paciente</p>
             <div className="mt-3 grid gap-4 md:grid-cols-[1fr_auto]">
               <div>
-                <h2 className="text-2xl font-bold">{pat?.name}</h2>
-                <p className="text-sm text-muted-foreground">{pat ? `${ageFromBirth(pat.birthDate)} anos` : ""} · {pat?.phone}</p>
-                <p className="mt-3 text-sm"><span className="text-muted-foreground">Motivo:</span> {next.reason}</p>
-                <p className="text-sm"><span className="text-muted-foreground">Servicio:</span> {sp?.name}</p>
+                <h2 className="text-2xl font-bold">{pat?.name ?? "Paciente"}</h2>
+                <p className="text-sm text-muted-foreground">{edadTexto(pat)} {pat?.phone ? `· ${pat.phone}` : ""}</p>
+                <p className="mt-3 text-sm"><span className="text-muted-foreground">Motivo:</span> {next.reason || "—"}</p>
                 <p className="text-sm"><span className="text-muted-foreground">Hora:</span> {next.time}</p>
                 <p className="mt-2 text-xs text-muted-foreground">{prior} consultas previas</p>
               </div>
               <div className="flex flex-col gap-2">
-                <Button size="lg" onClick={() => start(next.id)}><Play className="mr-2 h-4 w-4" /> Iniciar Consulta</Button>
-                <Button variant="outline" size="sm" onClick={() => noShow(next.id)}><XCircle className="mr-1 h-4 w-4" /> No asistio</Button>
+                <Button size="lg" disabled={transition.isPending} onClick={() => start(next)}>
+                  <Play className="mr-2 h-4 w-4" /> Iniciar Consulta
+                </Button>
+                <Button variant="outline" size="sm" disabled={transition.isPending} onClick={() => noShow(next)}>
+                  <XCircle className="mr-1 h-4 w-4" /> No asistio
+                </Button>
               </div>
             </div>
           </div>
@@ -139,12 +215,12 @@ function MyDay({ doctorId, onStart }: { doctorId: string; onStart: () => void })
                   <Clock className="h-5 w-5 text-primary" />
                 </div>
                 <div className="min-w-0 flex-1">
-                  <p className="font-semibold">{a.time} · {pat?.name}</p>
-                  <p className="truncate text-sm text-muted-foreground">{a.reason}</p>
+                  <p className="font-semibold">{a.time} · {pat?.name ?? "Paciente"}</p>
+                  <p className="truncate text-sm text-muted-foreground">{a.reason || "—"}</p>
                 </div>
                 <span className={`shrink-0 rounded-full px-2 py-1 text-xs ${statusBadgeClass[a.status]}`}>{statusLabel[a.status]}</span>
                 {(a.status === "scheduled" || a.status === "confirmed") && (
-                  <Button size="sm" onClick={() => start(a.id)}>Iniciar</Button>
+                  <Button size="sm" disabled={transition.isPending} onClick={() => start(a)}>Iniciar</Button>
                 )}
               </div>
             );
@@ -155,10 +231,17 @@ function MyDay({ doctorId, onStart }: { doctorId: string; onStart: () => void })
   );
 }
 
-function Consultation({ doctorId }: { doctorId: string }) {
-  const { appointments, patients, specialties, updateAppointmentNotes, updateAppointmentStatus, addInvoice, invoices } = useStore();
-  const active = appointments.find((a) => a.doctorId === doctorId && a.status === "in_progress");
+/* ================= CONSULTA ================= */
+function Consultation({ doctor }: { doctor: Doctor }) {
+  const { data: appointments = [], isLoading } = useAppointments();
+  const { data: patients = [] } = usePatients();
+  const { data: services = [] } = useServices();
+  const transition = useTransitionAppointment();
   const [chargeOpen, setChargeOpen] = useState(false);
+
+  const active = appointments.find((a) => a.doctorId === doctor.id && a.status === "in_progress");
+
+  if (isLoading) return <Cargando />;
 
   if (!active) {
     return (
@@ -171,23 +254,28 @@ function Consultation({ doctorId }: { doctorId: string }) {
   }
 
   const pat = patients.find((p) => p.id === active.patientId);
-  const sp = specialties.find((s) => s.id === active.specialtyId);
-  const priorVisits = appointments.filter((a) => a.patientId === pat?.id && a.status === "completed");
+  const sp = services.find((s) => s.id === active.serviceId);
+  const priorVisits = appointments.filter(
+    (a) => a.patientId === pat?.id && a.status === "completed",
+  );
 
-  const complete = () => {
-    const r = updateAppointmentStatus(active.id, "completed");
-    if (!r.ok) toast.error(r.error || "Error"); else toast.success("Consulta completada");
+  const complete = async () => {
+    try {
+      await transition.mutateAsync({ id: active.id, desde: "in_progress", hasta: "completed" });
+      toast.success("Consulta completada");
+    } catch (e) {
+      toast.error((e as Error).message);
+    }
   };
 
   return (
     <div className="grid gap-4 md:grid-cols-[1fr_1.2fr]">
-      {/* Left: patient */}
       <div className="rounded-2xl border bg-card p-5 shadow-sm">
         <div className="flex items-center gap-3">
           <div className="grid h-12 w-12 place-items-center rounded-full bg-primary/10"><User className="h-5 w-5 text-primary" /></div>
           <div className="min-w-0">
-            <h3 className="truncate text-lg font-bold">{pat?.name}</h3>
-            <p className="text-xs text-muted-foreground">{pat ? `${ageFromBirth(pat.birthDate)} anos` : ""} · {pat?.phone}</p>
+            <h3 className="truncate text-lg font-bold">{pat?.name ?? "Paciente"}</h3>
+            <p className="text-xs text-muted-foreground">{edadTexto(pat)} {pat?.phone ? `· ${pat.phone}` : ""}</p>
             <p className="truncate text-xs text-muted-foreground">{pat?.email}</p>
           </div>
         </div>
@@ -199,56 +287,122 @@ function Consultation({ doctorId }: { doctorId: string }) {
               <div key={a.id} className="rounded-lg bg-accent/30 p-3 text-xs">
                 <div className="flex justify-between">
                   <span className="font-medium">{formatDate(a.date)}</span>
-                  <span className="text-muted-foreground">{specialties.find((s) => s.id === a.specialtyId)?.name}</span>
+                  <span className="text-muted-foreground">{services.find((s) => s.id === a.serviceId)?.name}</span>
                 </div>
-                {a.clinicalNotes && <p className="mt-1 text-muted-foreground">{a.clinicalNotes}</p>}
               </div>
             ))}
           </div>
         </div>
       </div>
 
-      {/* Right: consultation */}
       <div className="rounded-2xl border bg-card p-5 shadow-sm">
         <div className="mb-3 flex items-center justify-between">
           <div>
             <p className="text-xs uppercase text-primary">Consulta activa</p>
-            <h3 className="font-semibold">{sp?.name}</h3>
+            <h3 className="font-semibold">{sp?.name ?? "Consulta"}</h3>
           </div>
           <span className={`rounded-full px-2 py-1 text-xs ${statusBadgeClass[active.status]}`}>{statusLabel[active.status]}</span>
         </div>
-        <p className="text-sm"><span className="text-muted-foreground">Motivo:</span> {active.reason}</p>
+        <p className="text-sm"><span className="text-muted-foreground">Motivo:</span> {active.reason || "—"}</p>
 
-        <div className="mt-4">
-          <Label>Notas de la consulta</Label>
-          <Textarea
-            rows={8}
-            value={active.clinicalNotes}
-            placeholder="Diagnostico, indicaciones, medicamentos..."
-            onChange={(e) => updateAppointmentNotes(active.id, e.target.value)}
-          />
-          <p className="mt-1 text-xs text-muted-foreground">Autoguardado</p>
-        </div>
+        <NotasClinicas appointmentId={active.id} />
 
         <div className="mt-5 flex flex-wrap gap-2">
-          <Button onClick={complete}><Check className="mr-1 h-4 w-4" /> Completar Consulta</Button>
+          <Button onClick={complete} disabled={transition.isPending}><Check className="mr-1 h-4 w-4" /> Completar Consulta</Button>
           <Button variant="outline" onClick={() => setChargeOpen(true)}><DollarSign className="mr-1 h-4 w-4" /> Cobrar</Button>
         </div>
       </div>
 
-      {chargeOpen && <ChargeDialog amount={sp?.price || 0} onClose={() => setChargeOpen(false)} onConfirm={(amt, method, notes) => {
-        addInvoice(active.id, amt, method, notes);
-        toast.success("Cobro registrado");
-        setChargeOpen(false);
-      }} />}
+      {chargeOpen && (
+        <ChargeDialog
+          appointment={active}
+          service={sp}
+          doctor={doctor}
+          onClose={() => setChargeOpen(false)}
+        />
+      )}
     </div>
   );
 }
 
-function ChargeDialog({ amount, onClose, onConfirm }: { amount: number; onClose: () => void; onConfirm: (a: number, m: PaymentMethod, n: string) => void }) {
-  const [amt, setAmt] = useState(amount);
+/**
+ * Notas clinicas con autoguardado.
+ *
+ * Se escribe en estado local y se persiste con debounce: guardar en cada
+ * pulsacion seria una peticion por tecla.
+ *
+ * Las notas viven en `appointment_notes`, no en la cita, para que el
+ * paciente no pueda leerlas (ver migracion 20260727120400).
+ */
+function NotasClinicas({ appointmentId }: { appointmentId: string }) {
+  const { data: guardadas = "", isLoading } = useAppointmentNote(appointmentId);
+  const save = useSaveAppointmentNote();
+
+  const [texto, setTexto] = useState("");
+  const [tocado, setTocado] = useState(false);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Al cargar (o al cambiar de cita) se sincroniza con lo que hay en la base
+  useEffect(() => {
+    setTexto(guardadas);
+    setTocado(false);
+  }, [guardadas, appointmentId]);
+
+  useEffect(() => {
+    if (!tocado) return;
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = setTimeout(() => {
+      save.mutate({ appointmentId, content: texto });
+    }, 900);
+    return () => { if (timer.current) clearTimeout(timer.current); };
+    // `save` cambia de identidad en cada render; incluirlo reiniciaria el timer
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [texto, tocado, appointmentId]);
+
+  return (
+    <div className="mt-4">
+      <Label>Notas de la consulta</Label>
+      <Textarea
+        rows={8}
+        value={texto}
+        disabled={isLoading}
+        placeholder="Diagnostico, indicaciones, medicamentos..."
+        onChange={(e) => { setTexto(e.target.value); setTocado(true); }}
+      />
+      <p className="mt-1 text-xs text-muted-foreground">
+        {save.isPending ? "Guardando..." : tocado ? "Autoguardado" : "Solo tu y la clinica veis estas notas"}
+      </p>
+    </div>
+  );
+}
+
+function ChargeDialog({
+  appointment, service, doctor, onClose,
+}: {
+  appointment: Appointment; service: Service | undefined; doctor: Doctor; onClose: () => void;
+}) {
+  const crear = useCreateInvoice();
+  const [amt, setAmt] = useState(service?.price ?? 0);
   const [method, setMethod] = useState<PaymentMethod>("efectivo");
   const [notes, setNotes] = useState("");
+
+  const confirmar = async () => {
+    try {
+      await crear.mutateAsync({
+        clinicId: doctor.clinicId,
+        appointmentId: appointment.id,
+        patientId: appointment.patientId,
+        amount: amt,
+        method,
+        notes,
+      });
+      toast.success("Cobro registrado");
+      onClose();
+    } catch (e) {
+      toast.error((e as Error).message);
+    }
+  };
+
   return (
     <Dialog open onOpenChange={onClose}>
       <DialogContent>
@@ -269,23 +423,36 @@ function ChargeDialog({ amount, onClose, onConfirm }: { amount: number; onClose:
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={onClose}>Cancelar</Button>
-          <Button onClick={() => onConfirm(amt, method, notes)}>Confirmar Cobro</Button>
+          <Button onClick={confirmar} disabled={crear.isPending}>
+            {crear.isPending ? "Guardando..." : "Confirmar Cobro"}
+          </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
   );
 }
 
-function MyPatients({ doctorId }: { doctorId: string }) {
-  const { appointments, patients, specialties } = useStore();
+/* ================= MIS PACIENTES ================= */
+function MyPatients({ doctor }: { doctor: Doctor }) {
+  const { data: appointments = [], isLoading } = useAppointments();
+  const { data: patients = [] } = usePatients();
+  const { data: services = [] } = useServices();
+
+  const misCitas = useMemo(
+    () => appointments.filter((a) => a.doctorId === doctor.id),
+    [appointments, doctor.id],
+  );
+
   const myPatients = useMemo(() => {
-    const ids = new Set(appointments.filter((a) => a.doctorId === doctorId).map((a) => a.patientId));
+    const ids = new Set(misCitas.map((a) => a.patientId));
     return patients.filter((p) => ids.has(p.id));
-  }, [appointments, patients, doctorId]);
+  }, [misCitas, patients]);
 
   const [selected, setSelected] = useState<string | null>(null);
   const sel = patients.find((p) => p.id === selected);
-  const selectedHistory = appointments.filter((a) => a.doctorId === doctorId && a.patientId === selected);
+  const selectedHistory = misCitas.filter((a) => a.patientId === selected);
+
+  if (isLoading) return <Cargando />;
 
   return (
     <div className="space-y-3">
@@ -296,7 +463,7 @@ function MyPatients({ doctorId }: { doctorId: string }) {
       )}
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
         {myPatients.map((p) => {
-          const visits = appointments.filter((a) => a.doctorId === doctorId && a.patientId === p.id);
+          const visits = misCitas.filter((a) => a.patientId === p.id);
           const last = [...visits].sort((a, b) => b.date.localeCompare(a.date))[0];
           return (
             <button key={p.id} onClick={() => setSelected(p.id)} className="rounded-2xl border bg-card p-4 text-left shadow-sm transition hover:border-primary">
@@ -318,13 +485,22 @@ function MyPatients({ doctorId }: { doctorId: string }) {
                   <span className="font-medium">{formatDate(a.date)} {a.time}</span>
                   <span className={`rounded-full px-2 py-0.5 text-xs ${statusBadgeClass[a.status]}`}>{statusLabel[a.status]}</span>
                 </div>
-                <p className="mt-1 text-xs text-muted-foreground">{specialties.find((s) => s.id === a.specialtyId)?.name} · {a.reason}</p>
-                {a.clinicalNotes && <p className="mt-2 text-xs">{a.clinicalNotes}</p>}
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {services.find((s) => s.id === a.serviceId)?.name} · {a.reason || "—"}
+                </p>
               </div>
             ))}
           </div>
         </DialogContent>
       </Dialog>
+    </div>
+  );
+}
+
+function Cargando() {
+  return (
+    <div className="grid place-items-center py-20">
+      <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
     </div>
   );
 }
