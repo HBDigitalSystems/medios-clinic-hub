@@ -1,5 +1,5 @@
 import { createFileRoute, useNavigate, Link } from "@tanstack/react-router";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import {
   ArrowLeft, ArrowRight, Calendar as CalIcon, Check, Stethoscope, SmilePlus, Baby, Scan,
@@ -17,6 +17,7 @@ import {
 } from "@/lib/api/appointments";
 import { crearMiFicha, usePatientByUserId } from "@/lib/api/patients";
 import { useAuth } from "@/lib/auth";
+import { AuthDialog } from "@/components/auth/auth-dialog";
 import type { Doctor } from "@/lib/api/types";
 import {
   generateTimeSlots, formatDate, formatDateLong, rangesOverlap, isoLocal, todayISO, horaActual,
@@ -32,6 +33,10 @@ export const Route = createFileRoute("/booking")({
       { title: "Agendar Cita - DoctorCita Clinica" },
       { name: "description", content: "Reserva tu cita medica en linea en pocos pasos." },
     ],
+  }),
+  // La landing enlaza aqui con una especialidad ya elegida
+  validateSearch: (search: Record<string, unknown>): { especialidad?: string } => ({
+    especialidad: typeof search.especialidad === "string" ? search.especialidad : undefined,
   }),
   component: BookingFlow,
 });
@@ -56,14 +61,22 @@ function BookingFlow() {
   const { user, session, loading: cargandoSesion } = useAuth();
   const { data: miFicha, isLoading: cargandoFicha } = usePatientByUserId(user?.id);
 
-  const [step, setStep] = useState(0);
+  const { especialidad: especialidadInicial } = Route.useSearch();
+
+  // Se guarda el NOMBRE del paso, no su indice: el numero de pasos cambia
+  // segun haya ficha o no, y con indices el flujo se descoloca solo.
+  const [pasoActual, setPasoActual] = useState<PasoId>(
+    especialidadInicial ? "doctor" : "especialidad",
+  );
   const [enviando, setEnviando] = useState(false);
-  const [specialtyId, setSpecialtyId] = useState<string>("");
+  const [specialtyId, setSpecialtyId] = useState<string>(especialidadInicial ?? "");
   const [doctorId, setDoctorId] = useState<string>("");
   const [date, setDate] = useState<string>("");
   const [time, setTime] = useState<string>("");
   const [form, setForm] = useState({ name: "", phone: "", email: "", reason: "" });
   const [done, setDone] = useState(false);
+  /** Seleccion aparcada mientras el visitante se identifica. */
+  const [pendienteDeAuth, setPendienteDeAuth] = useState<{ doctorId: string; hueco?: FreeSlot } | null>(null);
 
   const specialty = specialties.find((s) => s.id === specialtyId);
   const doctor = doctors.find((d) => d.id === doctorId);
@@ -75,11 +88,42 @@ function BookingFlow() {
     ? ["especialidad", "doctor", "fecha", "confirmacion"]
     : ["especialidad", "doctor", "fecha", "datos", "confirmacion"];
 
-  const pasoActual = pasos[step];
+  const indice = Math.max(0, pasos.indexOf(pasoActual));
 
-  const next = () => setStep((s) => Math.min(s + 1, pasos.length - 1));
-  const back = () => setStep((s) => Math.max(s - 1, 0));
-  const volverAFecha = () => setStep(pasos.indexOf("fecha"));
+  // Al entrar sesion aparece la ficha y "datos" desaparece de la lista.
+  // Si estabamos justo ahi, hay que reubicarse en vez de quedarse en un
+  // paso que ya no existe.
+  useEffect(() => {
+    if (!pasos.includes(pasoActual)) setPasoActual("confirmacion");
+  }, [pasos, pasoActual]);
+
+  const next = () => setPasoActual(pasos[Math.min(indice + 1, pasos.length - 1)]);
+  const back = () => setPasoActual(pasos[Math.max(indice - 1, 0)]);
+  const volverAFecha = () => setPasoActual("fecha");
+
+  /** Aplica la eleccion de medico y avanza. Con hueco concreto, salta el paso de fecha. */
+  const aplicarDoctor = (id: string, hueco?: FreeSlot) => {
+    setDoctorId(id);
+    if (hueco) {
+      setDate(hueco.date);
+      setTime(hueco.time);
+      setPasoActual(saltarDatos ? "confirmacion" : "datos");
+    } else {
+      setPasoActual("fecha");
+    }
+  };
+
+  /**
+   * Elegir medico es el punto donde se pide cuenta. Antes de eso se puede
+   * mirar todo: especialidades y medicos son datos publicos del landing.
+   */
+  const elegirDoctor = (id: string, hueco?: FreeSlot) => {
+    if (!session) {
+      setPendienteDeAuth({ doctorId: id, hueco });
+      return;
+    }
+    aplicarDoctor(id, hueco);
+  };
 
   const datosCompletos = !!form.name && !!form.phone && !!form.email;
 
@@ -123,43 +167,9 @@ function BookingFlow() {
     }
   };
 
-  // Agendar exige cuenta. La barrera real esta en RLS (`anon` no puede
-  // insertar citas ni pacientes); esto es la version amable de lo mismo.
-  if (!cargandoSesion && !session) {
-    return (
-      <div className="flex min-h-screen items-center justify-center bg-accent/20 p-4">
-        <div className="w-full max-w-md rounded-3xl bg-card p-8 text-center shadow-lg">
-          <div className="mx-auto grid h-14 w-14 place-items-center rounded-full bg-primary/10 text-primary">
-            <UserPlus className="h-7 w-7" />
-          </div>
-          <h1 className="mt-5 text-2xl font-bold">Entra para agendar</h1>
-          <p className="mt-2 text-sm text-muted-foreground">
-            Con tu cuenta puedes ver tus citas, reagendarlas o cancelarlas, y consultar
-            tus recibos. Crearla lleva menos de un minuto.
-          </p>
-          <div className="mt-6 flex flex-col gap-2">
-            <Button asChild size="lg">
-              <Link to="/auth" search={{ redirect: "/booking" }}>Entrar o crear cuenta</Link>
-            </Button>
-            <Button asChild variant="ghost">
-              <Link to="/">Volver al inicio</Link>
-            </Button>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  if (cargandoSesion) {
-    return (
-      <div className="grid min-h-screen place-items-center bg-accent/20">
-        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-      </div>
-    );
-  }
-
-  // Hasta saber si hay ficha no se sabe cuantos pasos tiene el flujo.
-  if (cargandoFicha) {
+  // Hasta saber si hay sesion y ficha no se sabe cuantos pasos hay.
+  // Sin sesion la consulta de ficha esta desactivada y no bloquea.
+  if (cargandoSesion || cargandoFicha) {
     return (
       <div className="grid min-h-screen place-items-center bg-accent/20">
         <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
@@ -209,10 +219,10 @@ function BookingFlow() {
           <div className="flex items-center justify-between">
             {pasos.map((id, i) => (
               <div key={id} className="flex flex-1 items-center last:flex-none">
-                <div className={`grid h-8 w-8 shrink-0 place-items-center rounded-full text-xs font-bold ${i <= step ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground"}`}>
-                  {i < step ? <Check className="h-4 w-4" /> : i + 1}
+                <div className={`grid h-8 w-8 shrink-0 place-items-center rounded-full text-xs font-bold ${i <= indice ? "bg-primary text-primary-foreground" : "bg-muted text-muted-foreground"}`}>
+                  {i < indice ? <Check className="h-4 w-4" /> : i + 1}
                 </div>
-                {i < pasos.length - 1 && <div className={`h-1 flex-1 ${i < step ? "bg-primary" : "bg-muted"}`} />}
+                {i < pasos.length - 1 && <div className={`h-1 flex-1 ${i < indice ? "bg-primary" : "bg-muted"}`} />}
               </div>
             ))}
           </div>
@@ -232,7 +242,7 @@ function BookingFlow() {
                 return (
                   <button
                     key={s.id}
-                    onClick={() => { setSpecialtyId(s.id); next(); }}
+                    onClick={() => { setSpecialtyId(s.id); setPasoActual("doctor"); }}
                     className={`rounded-2xl border-2 p-5 text-left transition hover:border-primary hover:bg-accent/40 ${specialtyId === s.id ? "border-primary bg-accent/40" : "border-border"}`}
                   >
                     <div className="grid h-12 w-12 place-items-center rounded-xl bg-primary/10 text-primary">
@@ -255,17 +265,7 @@ function BookingFlow() {
                   especialidad={specialty?.name ?? ""}
                   duracion={specialty?.duration ?? 30}
                   seleccionado={doctorId === d.id}
-                  onElegir={(hueco) => {
-                    setDoctorId(d.id);
-                    // Con un horario concreto se salta SOLO el paso de fecha.
-                    // Sin sesion, el siguiente sigue siendo "datos": saltar
-                    // hasta confirmar dejaria la cita sin nombre ni telefono.
-                    if (hueco) {
-                      setDate(hueco.date);
-                      setTime(hueco.time);
-                      setStep(pasos.indexOf("fecha") + 1);
-                    } else next();
-                  }}
+                  onElegir={(hueco) => elegirDoctor(d.id, hueco)}
                 />
               ))}
               {doctors.filter((d) => d.serviceId === specialtyId).length === 0 && (
@@ -336,7 +336,7 @@ function BookingFlow() {
 
           {/* Nav */}
           <div className="mt-8 flex items-center justify-between">
-            {step > 0 ? (
+            {indice > 0 ? (
               <Button variant="ghost" onClick={back}><ArrowLeft className="mr-1 h-4 w-4" /> Atras</Button>
             ) : <span />}
             {pasoActual === "confirmacion" ? (
@@ -351,6 +351,23 @@ function BookingFlow() {
           </div>
         </div>
       </div>
+
+      {pendienteDeAuth && (
+        <AuthDialog
+          titulo="Ya casi esta"
+          descripcion={
+            doctors.find((d) => d.id === pendienteDeAuth.doctorId)
+              ? `Identificate para reservar con ${doctors.find((d) => d.id === pendienteDeAuth.doctorId)!.name}.`
+              : undefined
+          }
+          onClose={() => setPendienteDeAuth(null)}
+          onSuccess={() => {
+            // Se retoma la seleccion que quedo aparcada
+            aplicarDoctor(pendienteDeAuth.doctorId, pendienteDeAuth.hueco);
+            setPendienteDeAuth(null);
+          }}
+        />
+      )}
     </div>
   );
 }

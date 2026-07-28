@@ -98,14 +98,24 @@ function Landing() {
           {services.map((s) => {
             const Icon = iconMap[s.icon] || Stethoscope;
             return (
-              <div key={s.id} className="rounded-2xl border bg-card p-6 shadow-sm transition hover:shadow-md">
+              // Lleva al booking con la especialidad ya elegida: se abre
+              // directamente en la lista de medicos que la atienden
+              <Link
+                key={s.id}
+                to="/booking"
+                search={{ especialidad: s.id }}
+                className="group rounded-2xl border bg-card p-6 text-left shadow-sm transition hover:border-primary hover:shadow-md"
+              >
                 <div className="grid h-12 w-12 place-items-center rounded-xl bg-primary/10 text-primary">
                   <Icon className="h-6 w-6" />
                 </div>
                 <h3 className="mt-4 text-lg font-semibold">{s.name}</h3>
                 <p className="mt-1 text-sm text-muted-foreground">{s.description}</p>
                 <p className="mt-3 text-sm font-medium text-primary">Desde ${s.price.toLocaleString("es-MX")} MXN</p>
-              </div>
+                <p className="mt-2 text-xs font-medium text-muted-foreground transition group-hover:text-primary">
+                  Ver medicos disponibles →
+                </p>
+              </Link>
             );
           })}
         </div>
@@ -122,13 +132,25 @@ function Landing() {
             {doctors.map((d) => {
               const sp = services.find((s) => s.id === d.serviceId);
               return (
-                <div key={d.id} className="overflow-hidden rounded-2xl bg-card shadow-sm">
-                  <img src={d.photo} alt={d.name} className="aspect-square w-full object-cover" />
+                <Link
+                  key={d.id}
+                  to="/booking"
+                  search={d.serviceId ? { especialidad: d.serviceId } : {}}
+                  className="group overflow-hidden rounded-2xl bg-card shadow-sm transition hover:shadow-md"
+                >
+                  {d.photo
+                    ? <img src={d.photo} alt={d.name} className="aspect-square w-full object-cover" />
+                    : <div className="grid aspect-square w-full place-items-center bg-primary/10 text-primary">
+                        <Stethoscope className="h-12 w-12" />
+                      </div>}
                   <div className="p-4">
                     <h3 className="font-semibold">{d.name}</h3>
                     <p className="text-sm text-primary">{sp?.name}</p>
+                    <p className="mt-2 text-xs text-muted-foreground transition group-hover:text-primary">
+                      Ver disponibilidad →
+                    </p>
                   </div>
-                </div>
+                </Link>
               );
             })}
           </div>
