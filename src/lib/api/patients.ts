@@ -66,19 +66,24 @@ export function useCreatePatient() {
 }
 
 /**
- * Alta de paciente desde el booking PUBLICO (sin sesion).
+ * Crea la ficha de paciente del usuario logueado.
+ *
+ * Pasa cuando alguien se registra por su cuenta (no por invitacion) y
+ * agenda por primera vez: tiene cuenta, pero todavia no ficha.
+ *
+ * Nace con `user_id` puesto. Es obligatorio: la politica
+ * `patients_insert_own` exige `user_id = auth.uid()`, y sin el la ficha
+ * quedaria invisible para su propio dueño, porque `patients_select_own`
+ * filtra por esa columna.
  *
  * No es un hook: el booking la llama dentro de su propio flujo.
- *
- * Importante: NO se puede encadenar `.select()`. Devolver la fila recien
- * creada exige permiso de SELECT, y la politica de `anon` sobre `patients`
- * es solo de INSERT. Por eso se genera el id en el cliente.
  */
-export async function crearPacienteAnonimo(p: NuevoPaciente): Promise<string> {
+export async function crearMiFicha(p: NuevoPaciente & { userId: string }): Promise<string> {
   const id = crypto.randomUUID();
   const { error } = await supabase.from("patients").insert({
     id,
     clinic_id: p.clinicId,
+    user_id: p.userId,
     name: p.name,
     phone: p.phone,
     email: p.email ?? "",

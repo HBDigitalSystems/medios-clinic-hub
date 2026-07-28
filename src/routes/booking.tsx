@@ -13,10 +13,9 @@ import { useClinic } from "@/lib/api/clinic";
 import { useServices } from "@/lib/api/services";
 import { useActiveDoctors } from "@/lib/api/doctors";
 import {
-  crearCitaAnonima, useDoctorBusyBlocks, useDoctorNextSlots, type FreeSlot,
+  crearCita, useDoctorBusyBlocks, useDoctorNextSlots, type FreeSlot,
 } from "@/lib/api/appointments";
-import { crearPacienteAnonimo } from "@/lib/api/patients";
-import { usePatientByUserId } from "@/lib/api/patients";
+import { crearMiFicha, usePatientByUserId } from "@/lib/api/patients";
 import { useAuth } from "@/lib/auth";
 import type { Doctor } from "@/lib/api/types";
 import {
@@ -54,7 +53,7 @@ function BookingFlow() {
   const { data: specialties = [] } = useServices();
   const { data: doctors = [] } = useActiveDoctors();
 
-  const { user, signUp } = useAuth();
+  const { user, session, loading: cargandoSesion } = useAuth();
   const { data: miFicha, isLoading: cargandoFicha } = usePatientByUserId(user?.id);
 
   const [step, setStep] = useState(0);
@@ -64,9 +63,6 @@ function BookingFlow() {
   const [date, setDate] = useState<string>("");
   const [time, setTime] = useState<string>("");
   const [form, setForm] = useState({ name: "", phone: "", email: "", reason: "" });
-  const [quiereCuenta, setQuiereCuenta] = useState(false);
-  const [password, setPassword] = useState("");
-  const [cuentaCreada, setCuentaCreada] = useState(false);
   const [done, setDone] = useState(false);
 
   const specialty = specialties.find((s) => s.id === specialtyId);
@@ -85,26 +81,27 @@ function BookingFlow() {
   const back = () => setStep((s) => Math.max(s - 1, 0));
   const volverAFecha = () => setStep(pasos.indexOf("fecha"));
 
-  const datosCompletos = !!form.name && !!form.phone && !!form.email
-    && (!quiereCuenta || password.length >= 6);
+  const datosCompletos = !!form.name && !!form.phone && !!form.email;
 
   const confirm = async () => {
     if (!clinic) {
       toast.error("No se pudo cargar la clinica. Reintenta.");
       return;
     }
+    if (!user) return;
     setEnviando(true);
     try {
-      // Con sesion se reutiliza la ficha; sin ella se crea una.
-      // No se busca por telefono: `anon` no puede leer `patients` (RLS).
-      const patientId = miFicha?.id ?? (await crearPacienteAnonimo({
+      // Si ya tiene ficha se reutiliza. Si no (cuenta creada por su cuenta,
+      // sin invitacion), se crea ahora, ya vinculada a su user_id.
+      const patientId = miFicha?.id ?? (await crearMiFicha({
         clinicId: clinic.id,
+        userId: user.id,
         name: form.name,
         phone: form.phone,
         email: form.email,
       }));
 
-      await crearCitaAnonima({
+      await crearCita({
         clinicId: clinic.id,
         patientId,
         doctorId,
@@ -114,23 +111,6 @@ function BookingFlow() {
         duration: specialty?.duration || 30,
         reason: form.reason,
       });
-
-      // La cita ya esta guardada. La cuenta es opcional y va DESPUES a
-      // proposito: si el email ya existe, la reserva no se pierde.
-      if (quiereCuenta && !miFicha) {
-        const { error } = await signUp({
-          email: form.email,
-          password,
-          fullName: form.name,
-          // El trigger handle_new_user vincula esta ficha a la cuenta nueva
-          invite: { type: "patient", id: patientId },
-        });
-        if (error) {
-          toast.warning(`Tu cita quedo agendada, pero no se pudo crear la cuenta: ${error}`);
-        } else {
-          setCuentaCreada(true);
-        }
-      }
 
       toast.success("Cita confirmada!");
       setDone(true);
@@ -143,8 +123,42 @@ function BookingFlow() {
     }
   };
 
+  // Agendar exige cuenta. La barrera real esta en RLS (`anon` no puede
+  // insertar citas ni pacientes); esto es la version amable de lo mismo.
+  if (!cargandoSesion && !session) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-accent/20 p-4">
+        <div className="w-full max-w-md rounded-3xl bg-card p-8 text-center shadow-lg">
+          <div className="mx-auto grid h-14 w-14 place-items-center rounded-full bg-primary/10 text-primary">
+            <UserPlus className="h-7 w-7" />
+          </div>
+          <h1 className="mt-5 text-2xl font-bold">Entra para agendar</h1>
+          <p className="mt-2 text-sm text-muted-foreground">
+            Con tu cuenta puedes ver tus citas, reagendarlas o cancelarlas, y consultar
+            tus recibos. Crearla lleva menos de un minuto.
+          </p>
+          <div className="mt-6 flex flex-col gap-2">
+            <Button asChild size="lg">
+              <Link to="/auth" search={{ redirect: "/booking" }}>Entrar o crear cuenta</Link>
+            </Button>
+            <Button asChild variant="ghost">
+              <Link to="/">Volver al inicio</Link>
+            </Button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (cargandoSesion) {
+    return (
+      <div className="grid min-h-screen place-items-center bg-accent/20">
+        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
+
   // Hasta saber si hay ficha no se sabe cuantos pasos tiene el flujo.
-  // Sin sesion la consulta esta desactivada, asi que esto no bloquea a nadie.
   if (cargandoFicha) {
     return (
       <div className="grid min-h-screen place-items-center bg-accent/20">
@@ -162,11 +176,6 @@ function BookingFlow() {
           </div>
           <h1 className="mt-6 text-2xl font-bold">Tu cita esta confirmada</h1>
           <p className="mt-2 text-sm text-muted-foreground">Te enviaremos un recordatorio 24h antes.</p>
-          {cuentaCreada && (
-            <p className="mt-3 rounded-xl bg-emerald-50 p-3 text-sm text-emerald-800">
-              Tu cuenta esta lista. Desde tu portal puedes ver, reagendar o cancelar tus citas.
-            </p>
-          )}
           <div className="mt-6 space-y-2 rounded-2xl bg-accent/40 p-4 text-left text-sm">
             <p><span className="text-muted-foreground">Doctor:</span> <span className="font-medium">{doctor?.name}</span></p>
             <p><span className="text-muted-foreground">Servicio:</span> <span className="font-medium">{specialty?.name}</span></p>
@@ -288,43 +297,9 @@ function BookingFlow() {
                 <Textarea id="reason" rows={3} value={form.reason} onChange={(e) => setForm({ ...form, reason: e.target.value })} />
               </div>
 
-              {/* Crear cuenta es opcional: agendar sin registrarse sigue funcionando */}
-              <div className="rounded-2xl border bg-accent/20 p-4">
-                <label className="flex cursor-pointer items-start gap-3">
-                  <input
-                    type="checkbox"
-                    checked={quiereCuenta}
-                    onChange={(e) => setQuiereCuenta(e.target.checked)}
-                    className="mt-1 h-4 w-4 shrink-0 accent-[oklch(0.55_0.20_258)]"
-                  />
-                  <span>
-                    <span className="flex items-center gap-2 text-sm font-medium">
-                      <UserPlus className="h-4 w-4 text-primary" /> Crear mi cuenta
-                    </span>
-                    <span className="mt-1 block text-xs text-muted-foreground">
-                      Para ver, reagendar o cancelar tus citas y consultar tus recibos.
-                      Si no la creas, tu cita queda agendada igual.
-                    </span>
-                  </span>
-                </label>
-
-                {quiereCuenta && (
-                  <div className="mt-4">
-                    <Label htmlFor="password">Contrasena</Label>
-                    <Input
-                      id="password"
-                      type="password"
-                      value={password}
-                      onChange={(e) => setPassword(e.target.value)}
-                      autoComplete="new-password"
-                      placeholder="Minimo 6 caracteres"
-                    />
-                    <p className="mt-1 text-xs text-muted-foreground">
-                      Entraras con <span className="font-medium">{form.email || "tu email"}</span>.
-                    </p>
-                  </div>
-                )}
-              </div>
+              <p className="text-xs text-muted-foreground">
+                Guardaremos estos datos en tu ficha para que no tengas que repetirlos.
+              </p>
             </div>
           )}
 

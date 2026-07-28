@@ -164,12 +164,15 @@ export function useCreateAppointment() {
 }
 
 /**
- * Alta de cita desde el booking PUBLICO (sin sesion).
+ * Alta de cita desde el booking, con sesion.
  *
- * Igual que en `crearPacienteAnonimo`: nada de `.select()`, porque `anon`
- * tiene INSERT pero no SELECT sobre `appointments`.
+ * Pasa por la politica `appointments_insert_own`, que exige que el
+ * `patient_id` sea la ficha de quien esta logueado y que la cita nazca
+ * como 'scheduled'.
+ *
+ * Sin `.select()`: no hace falta la fila de vuelta y evita un viaje mas.
  */
-export async function crearCitaAnonima(c: NuevaCita): Promise<string> {
+export async function crearCita(c: NuevaCita): Promise<string> {
   const id = crypto.randomUUID();
   const { error } = await supabase.from("appointments").insert({
     id,
@@ -185,8 +188,7 @@ export async function crearCitaAnonima(c: NuevaCita): Promise<string> {
   });
   lanzarSiError(error);
 
-  // La politica de anon sobre appointment_events solo admite type='created'
-  await supabase.from("appointment_events").insert({ appointment_id: id, type: "created" });
+  await registrarEvento(id, "created");
   return id;
 }
 

@@ -10,6 +10,8 @@ import { useAuth, homeForRole } from "@/lib/auth";
 type InviteSearch = {
   invite?: "doctor" | "patient";
   id?: string;
+  /** A donde volver tras entrar. Lo usa el booking, que exige cuenta. */
+  redirect?: string;
 };
 
 export const Route = createFileRoute("/auth")({
@@ -17,13 +19,20 @@ export const Route = createFileRoute("/auth")({
   validateSearch: (search: Record<string, unknown>): InviteSearch => ({
     invite: search.invite === "doctor" || search.invite === "patient" ? search.invite : undefined,
     id: typeof search.id === "string" ? search.id : undefined,
+    // Solo rutas internas: un `redirect` con http:// permitiria mandar al
+    // usuario a otro dominio tras el login
+    redirect:
+      typeof search.redirect === "string" && search.redirect.startsWith("/")
+        && !search.redirect.startsWith("//")
+        ? search.redirect
+        : undefined,
   }),
   component: Auth,
 });
 
 function Auth() {
   const navigate = useNavigate();
-  const { invite, id: inviteId } = Route.useSearch();
+  const { invite, id: inviteId, redirect } = Route.useSearch();
   const { signIn, signUp, signOut, session, profile, loading } = useAuth();
 
   // Con una invitacion en la URL se abre directamente en modo registro
@@ -46,8 +55,9 @@ function Auth() {
     // Con invitacion solo se redirige si la sesion es la que se acaba de
     // crear aqui. Si es de otra persona, se deja ver el formulario.
     if (invite && !recienRegistrado) return;
-    navigate({ to: homeForRole[profile.role], replace: true });
-  }, [invite, recienRegistrado, loading, session, profile, navigate]);
+    // Quien venia del booking vuelve alli; el resto, a su panel
+    navigate({ to: redirect ?? homeForRole[profile.role], replace: true });
+  }, [invite, recienRegistrado, loading, session, profile, redirect, navigate]);
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();

@@ -650,21 +650,56 @@ cabecera. Datos de prueba limpiados después.
 
 ## Fase 4 — Deploy a Producción ⬜ PENDIENTE
 
-### 4.1 — Preparación del build ⬜
-- [ ] Verificar que `bun run build` pasa sin errores
-- [ ] **Decidir target de deploy** (el preset Nitro por defecto es Cloudflare, no Vercel)
-- [ ] Revisar tamaño de bundle; code splitting si hace falta
+### 4.1 — Preparación del build ✅ (28-jul-2026)
 
-### 4.2 — Setup del hosting ⬜
-- [ ] Conectar el repo al hosting elegido
-- [ ] Variables de entorno de producción
-- [ ] Deploy inicial
+- [x] `bun run build` pasa sin errores
+- [x] **Target decidido: Vercel.** El paquete de Lovable pone `cloudflare-module` como
+      `defaultPreset`; se fija `nitro: { preset: "vercel" }` en `vite.config.ts`. Dentro
+      del sandbox de Lovable ellos fuerzan Cloudflare igualmente, así que su preview
+      sigue funcionando.
+- [x] El build genera `.vercel/output` (Build Output API v3): función SSR `__server` y
+      rutas con `filesystem` + fallback al servidor
+- [x] `vercel.json` fija `bun install --frozen-lockfile` y `bun run build`, para que
+      Vercel no use npm teniendo un lockfile de bun
+- [x] `.vercel` y `.claude` en `.gitignore`
+
+### 4.2 — Setup del hosting 🔄
+
+- [x] Código publicado en GitHub (`main`, commit `55da5ac`)
+- [x] `.env` fuera del repositorio
+- [ ] Importar el repo en Vercel y desplegar *(lo hace el dueño de la cuenta)*
+- [ ] Variables de entorno en Vercel
+
+**Solo 5 variables, y NO la `service_role`:**
+
+```
+VITE_SUPABASE_URL          VITE_SUPABASE_PROJECT_ID    VITE_SUPABASE_PUBLISHABLE_KEY
+SUPABASE_URL               SUPABASE_PUBLISHABLE_KEY
+```
+
+`SUPABASE_SERVICE_ROLE_KEY` **no se pone**: nadie importa `client.server.ts` ni el
+middleware de servidor — la app entera va por el cliente con RLS como frontera. Subirla
+sería exponer una llave maestra sin usarla.
+
+> ⚠️ **Las variables tienen que existir ANTES del primer build.** Se comprobó sobre el
+> build real: la URL de Supabase queda **incrustada** en `static/assets/index-*.js` y en
+> `functions/__server.func/`. No se leen en tiempo de ejecución. Si se despliega sin
+> ellas, `client.ts` lanza "Missing Supabase environment variable(s)" y la app no arranca;
+> añadirlas después **exige volver a desplegar**, no basta con reiniciar.
 
 ### 4.3 — Dominio y producción ⬜
+
 - [ ] Deploy funcional
+- [ ] **`site_url` y lista de redirecciones en Supabase** — ahora mismo el `site_url` es
+      `http://localhost:3000` y `uri_allow_list` está vacía. Se configura en cuanto se
+      conozca el dominio de Vercel.
 - [ ] Dominio personalizado (opcional)
-- [ ] URL de producción en los allowed origins de Supabase
-- [ ] Test E2E completo en producción
+- [ ] Test E2E en producción
+
+**Decisión de producto tomada:** `mailer_autoconfirm` se queda **activado** — no se
+verifica el email. Mantiene fluido el registro desde el booking (reservar → crear cuenta →
+ver tus citas, sin salir a buscar un correo). Contrapartida asumida: alguien puede
+registrarse con un email que no es suyo.
 
 ---
 
