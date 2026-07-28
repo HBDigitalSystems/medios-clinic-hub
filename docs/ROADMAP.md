@@ -687,14 +687,51 @@ sería exponer una llave maestra sin usarla.
 > ellas, `client.ts` lanza "Missing Supabase environment variable(s)" y la app no arranca;
 > añadirlas después **exige volver a desplegar**, no basta con reiniciar.
 
-### 4.3 — Dominio y producción ⬜
+### 4.3 — Dominio y producción ✅ (28-jul-2026)
 
-- [ ] Deploy funcional
-- [ ] **`site_url` y lista de redirecciones en Supabase** — ahora mismo el `site_url` es
-      `http://localhost:3000` y `uri_allow_list` está vacía. Se configura en cuanto se
-      conozca el dominio de Vercel.
-- [ ] Dominio personalizado (opcional)
-- [ ] Test E2E en producción
+**En producción:** https://medios-clinic-hub.vercel.app
+
+- [x] Deploy funcional
+- [x] `site_url` y lista de redirecciones configuradas en Supabase:
+      producción, previews de Vercel (`medios-clinic-hub-*.vercel.app`) y
+      `localhost:8080` para desarrollo
+- [x] Test E2E en producción: login de admin → dashboard con datos reales
+- [ ] Dominio personalizado (opcional, pendiente)
+
+**Incidencia del primer arranque: la clave llegó corrupta.** La app desplegaba pero
+reventaba con `Failed to construct 'Headers': String contains non ISO-8859-1 code point`, y
+no cargaba ni el login ni las especialidades.
+
+Inspeccionando el bundle desplegado, el valor incrustado tenía la **longitud correcta
+(208)** pero solo los **8 primeros caracteres eran reales**: los otros 200 eran `•`
+(U+2022). Se había copiado desde un campo enmascarado, y se guardaron literalmente los
+puntitos. Como `•` no es válido en una cabecera HTTP, **ninguna petición a Supabase llegaba
+a salir**.
+
+Aprendizaje para futuras variables: **no marcar como "Sensitive" la clave publishable.**
+Es pública por diseño —viaja en el bundle del navegador— y activarlo impide verificar el
+valor, que es justo lo que causó el problema.
+
+### 4.4 — Agendar exige cuenta ✅ (28-jul-2026)
+
+Migraciones: `20260728120000`, `20260728120100`
+
+Cambio de producto posterior al lanzamiento: se retira la reserva anónima.
+
+- [x] Fuera las políticas de escritura anónima sobre `appointments`, `patients` y
+      `appointment_events`
+- [x] `patients_insert_own`: el usuario crea su ficha con `user_id = auth.uid()`
+- [x] `/booking` con pantalla de acceso y vuelta automática vía `?redirect=`
+- [x] Lectura pública intacta: el landing se ve sin cuenta
+
+**El `revoke` no funcionó a la primera.** Revocar `EXECUTE` al rol `anon` sobre las
+funciones de horarios no surtió efecto: Postgres concede `EXECUTE` a `PUBLIC` al crear una
+función y `anon` lo hereda. Hay que revocar a `PUBLIC` y volver a conceder solo a
+`authenticated`.
+
+Verificado en producción: sin sesión, `/booking` muestra la pantalla de acceso, y los
+intentos de insertar paciente o cita por API devuelven
+`violates row-level security policy`.
 
 **Decisión de producto tomada:** `mailer_autoconfirm` se queda **activado** — no se
 verifica el email. Mantiene fluido el registro desde el booking (reservar → crear cuenta →
