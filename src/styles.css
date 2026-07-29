@@ -126,3 +126,42 @@
     -webkit-font-smoothing: antialiased;
   }
 }
+
+/* ---------------------------------------------------------------------
+   Impresion de reportes
+
+   El reporte vive oculto en la pagina y solo aparece al imprimir. Asi la
+   vista previa del navegador ya es la vista previa del documento, sin
+   necesidad de una pantalla aparte.
+   --------------------------------------------------------------------- */
+.solo-impresion { display: none; }
+
+@media print {
+  /* Fuera todo lo que no sea el reporte: barras, botones, navegacion */
+  .no-impresion { display: none !important; }
+
+  /* Los toasts se montan en body por portal y saldrian impresos */
+  [data-sonner-toaster] { display: none !important; }
+
+  /* Recharts inyecta este span en <body> para medir texto. Vive en
+     top:-20000px, y un absoluto tan lejos puede provocar paginas en blanco. */
+  #recharts_measurement_span { display: none !important; }
+
+  .solo-impresion { display: block !important; }
+
+  @page { margin: 1.5cm; }
+
+  body {
+    background: #fff;
+    color: #000;
+    font-size: 11pt;
+  }
+
+  /* Sin esto los fondos de los badges y cabeceras salen en blanco */
+  * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+
+  /* Que una tabla no se parta a la mitad entre paginas */
+  table { page-break-inside: auto; }
+  tr    { page-break-inside: avoid; page-break-after: auto; }
+  thead { display: table-header-group; }
+}

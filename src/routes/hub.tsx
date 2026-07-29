@@ -4,7 +4,7 @@ import { toast } from "sonner";
 import {
   LayoutDashboard, Calendar, UserCog, Users, CreditCard, BarChart3, Settings,
   Stethoscope, LogOut, Plus, CheckCircle, XCircle, UserPlus, DollarSign,
-  Search, AlertCircle, Pencil, Trash2, Loader2, RotateCcw,
+  Search, AlertCircle, Pencil, Trash2, Loader2, RotateCcw, Printer,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -20,6 +20,7 @@ import { useAuth } from "@/lib/auth";
 import { ProtectedRoute } from "@/components/auth/protected-route";
 import { ImageUpload } from "@/components/ui/image-upload";
 import { OnboardingWizard } from "@/components/onboarding-wizard";
+import { ReporteImprimible, useDatosDelReporte } from "@/components/reporte-imprimible";
 import { useStore } from "@/lib/store";
 import { useClinic, useUpdateClinic, useResetDemoData } from "@/lib/api/clinic";
 import { useServices, useCreateService, useUpdateService, useDeleteService } from "@/lib/api/services";
@@ -60,7 +61,7 @@ type TabKey = typeof TABS[number]["key"];
 
 function Hub() {
   const navigate = useNavigate();
-  const { signOut } = useAuth();
+  const { signOut, profile } = useAuth();
   const { data: clinic } = useClinic();
   const { data: doctors = [], isLoading: cargandoDoctores } = useDoctors();
   const { data: services = [], isLoading: cargandoServicios } = useServices();
@@ -101,7 +102,7 @@ function Hub() {
   }
 
   return (
-    <div className="flex min-h-screen bg-accent/10">
+    <div className="no-impresion flex min-h-screen bg-accent/10">
       <aside className={`hidden border-r bg-sidebar md:flex md:flex-col ${collapsed ? "w-16" : "w-60"} transition-all`}>
         <div className="flex h-16 items-center justify-between border-b px-4">
           <Link to="/" className="flex items-center gap-2 overflow-hidden">
@@ -143,9 +144,20 @@ function Hub() {
             <h1 className="truncate text-lg font-bold">{TABS.find((t) => t.key === tab)?.label}</h1>
             <p className="truncate text-xs text-muted-foreground">{clinic?.name ?? ""}</p>
           </div>
-          <Button asChild variant="ghost" size="sm" className="md:hidden">
-            <Link to="/"><Stethoscope className="h-4 w-4" /></Link>
-          </Button>
+          {/* En movil la barra lateral no existe, asi que sin esto no
+              habria forma de cerrar sesion */}
+          <div className="flex shrink-0 items-center gap-2">
+            {profile && (
+              <span className="hidden text-right text-xs leading-tight text-muted-foreground sm:block">
+                <span className="block font-medium text-foreground">{profile.fullName || "Administrador"}</span>
+                <span>{profile.role}</span>
+              </span>
+            )}
+            <Button variant="outline" size="sm" onClick={logout}>
+              <LogOut className="h-4 w-4 sm:mr-1" />
+              <span className="hidden sm:inline">Salir</span>
+            </Button>
+          </div>
         </header>
 
         <main className="min-h-0 flex-1 overflow-y-auto pb-20 md:pb-0">
@@ -1302,8 +1314,16 @@ function ReportsTab() {
   const { data: invoices = [], isLoading } = useInvoices();
   const { data: appointments = [] } = useAppointments();
   const { data: doctors = [] } = useDoctors();
+  const { data: services = [] } = useServices();
+  const { data: clinic } = useClinic();
 
   const desdeMes = inicioDeMes();
+
+  // Periodo del reporte imprimible: por defecto, el mes en curso
+  const [desde, setDesde] = useState(desdeMes);
+  const [hasta, setHasta] = useState(todayISO());
+
+  const datosReporte = useDatosDelReporte({ appointments, invoices, doctors, services, desde, hasta });
 
   // Bug B4: antes sumaba TODO el historico bajo la etiqueta "del mes"
   const monthIncome = invoices
@@ -1347,6 +1367,32 @@ function ReportsTab() {
 
   return (
     <div className="space-y-6 p-4 md:p-6">
+      {/* Reporte para imprimir: oculto en pantalla, visible al imprimir */}
+      <ReporteImprimible clinic={clinic} datos={datosReporte} desde={desde} hasta={hasta} />
+
+      <div className="flex flex-wrap items-end gap-3 rounded-2xl border bg-card p-4 shadow-sm">
+        <div>
+          <Label className="text-xs">Desde</Label>
+          <Input type="date" className="w-40" value={desde} onChange={(e) => setDesde(e.target.value)} />
+        </div>
+        <div>
+          <Label className="text-xs">Hasta</Label>
+          <Input type="date" className="w-40" value={hasta} onChange={(e) => setHasta(e.target.value)} />
+        </div>
+        <Button
+          variant="outline"
+          disabled={desde > hasta}
+          onClick={() => window.print()}
+        >
+          <Printer className="mr-1 h-4 w-4" /> Imprimir reporte
+        </Button>
+        <p className="text-xs text-muted-foreground">
+          {desde > hasta
+            ? "La fecha inicial no puede ser posterior a la final."
+            : `${datosReporte.filas.length} medico(s) con actividad · ${formatMoney(datosReporte.totales.ingresos)} cobrados`}
+        </p>
+      </div>
+
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <Kpi icon={DollarSign} label="Ingresos del mes" value={formatMoney(monthIncome)} color="bg-emerald-500" />
         <Kpi icon={XCircle} label="Tasa no-show" value={`${rate}%`} color="bg-rose-500" />

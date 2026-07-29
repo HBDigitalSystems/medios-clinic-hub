@@ -3,6 +3,20 @@ import type { Session, User } from "@supabase/supabase-js";
 import { supabase } from "@/integrations/supabase/client";
 import type { Database } from "@/integrations/supabase/types";
 
+// PENDIENTE: cierre de sesion por inactividad.
+//
+// La sesion vive en localStorage y no caduca sola, asi que en un equipo
+// compartido el siguiente en sentarse hereda la del anterior. Se implemento
+// con un temporizador reiniciado por eventos de actividad, pero no se pudo
+// verificar de forma fiable: en desarrollo, HMR deja instancias del modulo
+// con temporizadores vivos que cierran la sesion aunque haya actividad, y eso
+// impide distinguir un fallo real de un artefacto del entorno.
+//
+// No se entrega sin verificar: si el reinicio no funcionase, expulsaria a la
+// gente a mitad del trabajo. Conviene rehacerlo guardando la marca de tiempo
+// de la ultima actividad y comprobandola al cargar y al recuperar el foco,
+// que no depende de temporizadores de larga duracion y si se puede probar.
+
 export type AppRole = Database["public"]["Enums"]["app_role"];
 
 export interface Profile {
