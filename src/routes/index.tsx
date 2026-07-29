@@ -3,6 +3,7 @@ import {
   Stethoscope, SmilePlus, Baby, Scan, Apple, ShieldCheck, Zap, Database, Calendar, Phone, Mail, MapPin,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { LogoClinica } from "@/components/logo-clinica";
 import { useClinic } from "@/lib/api/clinic";
 import { useServices } from "@/lib/api/services";
 import { useActiveDoctors } from "@/lib/api/doctors";
@@ -40,11 +41,9 @@ function Landing() {
       {/* Nav */}
       <header className="sticky top-0 z-40 border-b bg-background/80 backdrop-blur">
         <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-4">
-          <Link to="/" className="flex items-center gap-2">
-            <div className="grid h-9 w-9 place-items-center rounded-xl bg-primary text-primary-foreground">
-              <Stethoscope className="h-5 w-5" />
-            </div>
-            <span className="text-lg font-bold">DoctorCita Clinica</span>
+          <Link to="/" className="flex min-w-0 items-center gap-2">
+            <LogoClinica logo={clinic?.logo} nombre={clinic?.name} />
+            <span className="truncate text-lg font-bold">{clinic?.name ?? "Clinica"}</span>
           </Link>
           <nav className="flex items-center gap-2">
             <Link to="/auth" className="hidden text-sm font-medium text-muted-foreground hover:text-foreground sm:inline">Entrar</Link>
@@ -199,11 +198,9 @@ function Landing() {
       <footer className="border-t bg-card">
         <div className="mx-auto grid max-w-6xl gap-8 px-4 py-12 md:grid-cols-3">
           <div>
-            <div className="flex items-center gap-2">
-              <div className="grid h-9 w-9 place-items-center rounded-xl bg-primary text-primary-foreground">
-                <Stethoscope className="h-5 w-5" />
-              </div>
-              <span className="text-lg font-bold">DoctorCita Clinica</span>
+            <div className="flex min-w-0 items-center gap-2">
+              <LogoClinica logo={clinic?.logo} nombre={clinic?.name} />
+              <span className="truncate text-lg font-bold">{clinic?.name ?? "Clinica"}</span>
             </div>
             <p className="mt-3 text-sm text-muted-foreground">Tu clinica. Tus datos. Tu sistema.</p>
           </div>

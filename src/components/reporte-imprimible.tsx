@@ -139,13 +139,24 @@ function Documento({
 
   return (
     <div className="solo-impresion p-6 text-black">
-      <header className="mb-6 border-b-2 border-black pb-4">
-        <h1 className="text-2xl font-bold">{clinic?.name ?? "Clinica"}</h1>
-        <p className="mt-1 text-sm">Reporte de actividad y cobros</p>
-        <p className="mt-2 text-sm">
-          Periodo: <strong>{formatDateLong(desde)}</strong> a <strong>{formatDateLong(hasta)}</strong>
-        </p>
-        <p className="text-xs">Generado el {formatDate(new Date().toISOString().slice(0, 10))}</p>
+      <header className="mb-6 flex items-start gap-4 border-b-2 border-black pb-4">
+        {clinic?.logo && (
+          // El span de medida de Recharts se oculta al imprimir, pero este
+          // logo si debe salir: es identidad del documento
+          <img
+            src={clinic.logo}
+            alt={clinic.name}
+            className="h-20 w-20 shrink-0 border object-contain"
+          />
+        )}
+        <div className="min-w-0">
+          <h1 className="text-2xl font-bold">{clinic?.name ?? "Clinica"}</h1>
+          <p className="mt-1 text-sm">Reporte de actividad y cobros</p>
+          <p className="mt-2 text-sm">
+            Periodo: <strong>{formatDateLong(desde)}</strong> a <strong>{formatDateLong(hasta)}</strong>
+          </p>
+          <p className="text-xs">Generado el {formatDate(new Date().toISOString().slice(0, 10))}</p>
+        </div>
       </header>
 
       <section className="mb-6">
