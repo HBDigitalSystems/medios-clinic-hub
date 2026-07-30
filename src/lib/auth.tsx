@@ -1,21 +1,22 @@
-import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { Session, User } from "@supabase/supabase-js";
+import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
+import { AvisoInactividad } from "@/components/auth/aviso-inactividad";
 import type { Database } from "@/integrations/supabase/types";
 
-// PENDIENTE: cierre de sesion por inactividad.
-//
-// La sesion vive en localStorage y no caduca sola, asi que en un equipo
-// compartido el siguiente en sentarse hereda la del anterior. Se implemento
-// con un temporizador reiniciado por eventos de actividad, pero no se pudo
-// verificar de forma fiable: en desarrollo, HMR deja instancias del modulo
-// con temporizadores vivos que cierran la sesion aunque haya actividad, y eso
-// impide distinguir un fallo real de un artefacto del entorno.
-//
-// No se entrega sin verificar: si el reinicio no funcionase, expulsaria a la
-// gente a mitad del trabajo. Conviene rehacerlo guardando la marca de tiempo
-// de la ultima actividad y comprobandola al cargar y al recuperar el foco,
-// que no depende de temporizadores de larga duracion y si se puede probar.
+/**
+ * Inactividad antes de avisar. La sesion vive en localStorage y no caduca
+ * sola, asi que en un equipo compartido el siguiente en sentarse heredaria
+ * la del anterior.
+ */
+const MINUTOS_HASTA_EL_AVISO = 25;
+
+/** Margen para responder al aviso antes de cerrar. */
+const SEGUNDOS_PARA_RESPONDER = 60;
+
+/** Gestos que cuentan como "sigo aqui". */
+const EVENTOS_DE_ACTIVIDAD = ["mousedown", "keydown", "touchstart", "scroll"] as const;
 
 export type AppRole = Database["public"]["Enums"]["app_role"];
 
@@ -114,6 +115,75 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
+  // ---------------------------------------------------------------------
+  // Inactividad: aviso con cuenta atras y cierre si nadie responde
+  //
+  // Se trabaja con MARCAS DE TIEMPO y un intervalo de un segundo, no con un
+  // setTimeout largo que haya que reiniciar en cada gesto. Asi no existe una
+  // cadena de reinicios que pueda romperse, y el calculo se rehace desde
+  // cero en cada vuelta: si el navegador ralentiza los temporizadores de una
+  // pestana en segundo plano, la cuenta sigue siendo correcta.
+  // ---------------------------------------------------------------------
+  const ultimaActividad = useRef(Date.now());
+  const avisoDesde = useRef<number | null>(null);
+  const [segundosRestantes, setSegundosRestantes] = useState<number | null>(null);
+
+  const seguirTrabajando = () => {
+    ultimaActividad.current = Date.now();
+    avisoDesde.current = null;
+    setSegundosRestantes(null);
+  };
+
+  useEffect(() => {
+    if (!session) {
+      avisoDesde.current = null;
+      setSegundosRestantes(null);
+      return;
+    }
+
+    ultimaActividad.current = Date.now();
+
+    const marcarActividad = () => {
+      // Con el aviso en pantalla la actividad NO cuenta: hay que confirmar.
+      // Un scroll accidental no deberia mantener viva una sesion en un
+      // equipo del que alguien se acaba de levantar.
+      if (avisoDesde.current !== null) return;
+      ultimaActividad.current = Date.now();
+    };
+
+    EVENTOS_DE_ACTIVIDAD.forEach((ev) =>
+      window.addEventListener(ev, marcarActividad, { passive: true }),
+    );
+
+    const tic = setInterval(() => {
+      if (avisoDesde.current === null) {
+        if (Date.now() - ultimaActividad.current >= MINUTOS_HASTA_EL_AVISO * 60_000) {
+          avisoDesde.current = Date.now();
+          setSegundosRestantes(SEGUNDOS_PARA_RESPONDER);
+        }
+        return;
+      }
+
+      const quedan = SEGUNDOS_PARA_RESPONDER - Math.floor((Date.now() - avisoDesde.current) / 1000);
+      if (quedan > 0) {
+        setSegundosRestantes(quedan);
+        return;
+      }
+
+      avisoDesde.current = null;
+      setSegundosRestantes(null);
+      void supabase.auth.signOut().then(() => {
+        setProfile(null);
+        toast.info("Cerramos tu sesion por inactividad.");
+      });
+    }, 1000);
+
+    return () => {
+      clearInterval(tic);
+      EVENTOS_DE_ACTIVIDAD.forEach((ev) => window.removeEventListener(ev, marcarActividad));
+    };
+  }, [session]);
+
   const value = useMemo<AuthContextValue>(
     () => ({
       session,
@@ -150,7 +220,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [session, profile, loading],
   );
 
-  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+  return (
+    <AuthContext.Provider value={value}>
+      {children}
+      {segundosRestantes !== null && (
+        <AvisoInactividad
+          segundosRestantes={segundosRestantes}
+          onContinuar={seguirTrabajando}
+          onCerrar={() => {
+            seguirTrabajando();
+            void value.signOut();
+          }}
+        />
+      )}
+    </AuthContext.Provider>
+  );
 }
 
 export function useAuth() {
