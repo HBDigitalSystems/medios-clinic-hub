@@ -21,7 +21,10 @@ const DialogOverlay = React.forwardRef<
   <DialogPrimitive.Overlay
     ref={ref}
     className={cn(
-      "fixed inset-0 z-50 bg-black/80  data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0",
+      // `no-impresion`: el overlay es un rectangulo negro al 80%. Radix lo
+      // monta en body por portal, asi que sin esto saldria pintado sobre la
+      // primera pagina al imprimir con un dialogo abierto.
+      "no-impresion fixed inset-0 z-50 bg-black/80  data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0",
       className,
     )}
     {...props}

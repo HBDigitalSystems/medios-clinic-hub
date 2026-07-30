@@ -127,18 +127,23 @@ export function ReporteImprimible(props: {
   return createPortal(<Documento {...props} />, document.body);
 }
 
-function Documento({
-  clinic, datos, desde, hasta,
+/**
+ * Contenido del reporte. Se exporta para poder mostrarlo tambien en la
+ * vista previa, y no tener dos versiones que se desincronicen.
+ */
+export function Documento({
+  clinic, datos, desde, hasta, className = "solo-impresion",
 }: {
   clinic: Clinic | null | undefined;
   datos: ReturnType<typeof useDatosDelReporte>;
   desde: string;
   hasta: string;
+  className?: string;
 }) {
   const { filas, totales } = datos;
 
   return (
-    <div className="solo-impresion p-6 text-black">
+    <div className={`${className} p-6 text-black`}>
       <header className="mb-6 flex items-start gap-4 border-b-2 border-black pb-4">
         {clinic?.logo && (
           // El span de medida de Recharts se oculta al imprimir, pero este
@@ -238,4 +243,77 @@ function Fila({ etiqueta, valor, destacado }: { etiqueta: string; valor: string;
       <td className={`p-2 text-right ${destacado ? "text-base font-bold" : "font-medium"}`}>{valor}</td>
     </tr>
   );
+}
+
+/**
+ * Vuelca el reporte a CSV para abrirlo en Excel o pasarlo a contabilidad.
+ *
+ * Separador `;` y BOM al inicio: sin eso, Excel en configuracion regional
+ * espanola mete toda la fila en una sola columna y rompe los acentos.
+ */
+export function reporteACsv({
+  clinic, datos, desde, hasta,
+}: {
+  clinic: Clinic | null | undefined;
+  datos: ReturnType<typeof useDatosDelReporte>;
+  desde: string;
+  hasta: string;
+}): string {
+  const { filas, totales } = datos;
+  const esc = (v: string | number) => {
+    const s = String(v);
+    return /[";\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  };
+  const linea = (...celdas: (string | number)[]) => celdas.map(esc).join(";");
+
+  const lineas = [
+    linea(clinic?.name ?? "Clinica"),
+    linea("Reporte de actividad y cobros"),
+    linea("Periodo", desde, hasta),
+    "",
+    linea("TOTALES DE LA CLINICA"),
+    linea("Ingresos cobrados", totales.ingresos),
+    linea("Cobros pendientes", totales.cobrosPendientes),
+    linea("Citas en el periodo", totales.citas),
+    linea("Completadas", totales.completadas),
+    linea("Por atender", totales.pendientes),
+    linea("No-shows", totales.noShows),
+    linea("Tasa no-show (%)", totales.tasaNoShow),
+    linea("Canceladas", totales.canceladas),
+  ];
+
+  if (totales.sinAtribuir > 0) {
+    lineas.push(linea("Cobros sin cita asociada", totales.sinAtribuir));
+  }
+
+  lineas.push(
+    "",
+    linea("DESGLOSE POR MEDICO"),
+    linea("Medico", "Especialidad", "Citas", "Completadas", "No-shows", "Tasa no-show (%)", "Canceladas", "Ingresos"),
+    ...filas.map((f) =>
+      linea(f.nombre, f.especialidad, f.total, f.completadas, f.noShows, f.tasaNoShow, f.canceladas, f.ingresos),
+    ),
+    linea(
+      "TOTAL", "",
+      filas.reduce((s, f) => s + f.total, 0),
+      filas.reduce((s, f) => s + f.completadas, 0),
+      filas.reduce((s, f) => s + f.noShows, 0),
+      "",
+      filas.reduce((s, f) => s + f.canceladas, 0),
+      filas.reduce((s, f) => s + f.ingresos, 0),
+    ),
+  );
+
+  return "﻿" + lineas.join("\r\n");
+}
+
+/** Provoca la descarga de un texto como archivo, sin pasar por el servidor. */
+export function descargarTexto(nombre: string, contenido: string, tipo = "text/csv;charset=utf-8") {
+  const url = URL.createObjectURL(new Blob([contenido], { type: tipo }));
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = nombre;
+  a.click();
+  // Sin revocar, el blob se queda en memoria mientras viva la pestana
+  URL.revokeObjectURL(url);
 }

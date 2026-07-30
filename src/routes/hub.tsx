@@ -4,7 +4,7 @@ import { toast } from "sonner";
 import {
   LayoutDashboard, Calendar, UserCog, Users, CreditCard, BarChart3, Settings,
   Stethoscope, LogOut, Plus, CheckCircle, XCircle, UserPlus, DollarSign,
-  Search, AlertCircle, Pencil, Trash2, Loader2, RotateCcw, Printer,
+  Search, AlertCircle, Pencil, Trash2, Loader2, RotateCcw, Printer, Home, Download, Eye,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -20,7 +20,9 @@ import { useAuth } from "@/lib/auth";
 import { ProtectedRoute } from "@/components/auth/protected-route";
 import { ImageUpload } from "@/components/ui/image-upload";
 import { OnboardingWizard } from "@/components/onboarding-wizard";
-import { ReporteImprimible, useDatosDelReporte } from "@/components/reporte-imprimible";
+import {
+  ReporteImprimible, Documento, useDatosDelReporte, reporteACsv, descargarTexto,
+} from "@/components/reporte-imprimible";
 import { useStore } from "@/lib/store";
 import { useClinic, useUpdateClinic, useResetDemoData } from "@/lib/api/clinic";
 import { useServices, useCreateService, useUpdateService, useDeleteService } from "@/lib/api/services";
@@ -153,6 +155,13 @@ function Hub() {
                 <span>{profile.role}</span>
               </span>
             )}
+            {/* Volver a la web publica sin cerrar sesion */}
+            <Button asChild variant="ghost" size="sm" title="Ver el sitio publico">
+              <Link to="/">
+                <Home className="h-4 w-4 sm:mr-1" />
+                <span className="hidden sm:inline">Inicio</span>
+              </Link>
+            </Button>
             <Button variant="outline" size="sm" onClick={logout}>
               <LogOut className="h-4 w-4 sm:mr-1" />
               <span className="hidden sm:inline">Salir</span>
@@ -1322,6 +1331,7 @@ function ReportsTab() {
   // Periodo del reporte imprimible: por defecto, el mes en curso
   const [desde, setDesde] = useState(desdeMes);
   const [hasta, setHasta] = useState(todayISO());
+  const [previaAbierta, setPreviaAbierta] = useState(false);
 
   const datosReporte = useDatosDelReporte({ appointments, invoices, doctors, services, desde, hasta });
 
@@ -1379,12 +1389,8 @@ function ReportsTab() {
           <Label className="text-xs">Hasta</Label>
           <Input type="date" className="w-40" value={hasta} onChange={(e) => setHasta(e.target.value)} />
         </div>
-        <Button
-          variant="outline"
-          disabled={desde > hasta}
-          onClick={() => window.print()}
-        >
-          <Printer className="mr-1 h-4 w-4" /> Imprimir reporte
+        <Button disabled={desde > hasta} onClick={() => setPreviaAbierta(true)}>
+          <Eye className="mr-1 h-4 w-4" /> Ver reporte
         </Button>
         <p className="text-xs text-muted-foreground">
           {desde > hasta
@@ -1392,6 +1398,16 @@ function ReportsTab() {
             : `${datosReporte.filas.length} medico(s) con actividad · ${formatMoney(datosReporte.totales.ingresos)} cobrados`}
         </p>
       </div>
+
+      {previaAbierta && (
+        <VistaPreviaReporte
+          clinic={clinic}
+          datos={datosReporte}
+          desde={desde}
+          hasta={hasta}
+          onClose={() => setPreviaAbierta(false)}
+        />
+      )}
 
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <Kpi icon={DollarSign} label="Ingresos del mes" value={formatMoney(monthIncome)} color="bg-emerald-500" />
@@ -1496,6 +1512,62 @@ function ConfigTab({ onRelanzarWizard }: { onRelanzarWizard: () => void }) {
 
       <ResetDemo />
     </div>
+  );
+}
+
+/**
+ * Vista previa antes de imprimir o descargar.
+ *
+ * Muestra el MISMO componente `Documento` que se imprime, asi que lo que se
+ * ve es literalmente lo que sale: no hay dos maquetas que puedan
+ * desincronizarse.
+ *
+ * El dialogo lleva `no-impresion` porque Radix lo monta en `body` por
+ * portal: sin eso, al imprimir saldrian tambien los botones y el marco.
+ */
+function VistaPreviaReporte({
+  clinic, datos, desde, hasta, onClose,
+}: {
+  clinic: Clinic | null | undefined;
+  datos: ReturnType<typeof useDatosDelReporte>;
+  desde: string;
+  hasta: string;
+  onClose: () => void;
+}) {
+  const descargarCsv = () => {
+    const nombre = `reporte-${(clinic?.name ?? "clinica").toLowerCase().replace(/[^a-z0-9]+/g, "-")}-${desde}_a_${hasta}.csv`;
+    descargarTexto(nombre, reporteACsv({ clinic, datos, desde, hasta }));
+    toast.success("Reporte descargado");
+  };
+
+  return (
+    <Dialog open onOpenChange={onClose}>
+      <DialogContent className="no-impresion max-h-[92vh] max-w-4xl overflow-hidden p-0">
+        <DialogHeader className="border-b px-6 py-4">
+          <DialogTitle>Vista previa del reporte</DialogTitle>
+          <DialogDescription>
+            Esto es exactamente lo que se imprime o se guarda como PDF.
+          </DialogDescription>
+        </DialogHeader>
+
+        {/* El documento va sobre gris para que se lea como una hoja */}
+        <div className="max-h-[62vh] overflow-y-auto bg-neutral-200 p-4">
+          <div className="mx-auto max-w-3xl bg-white shadow-md">
+            <Documento clinic={clinic} datos={datos} desde={desde} hasta={hasta} className="" />
+          </div>
+        </div>
+
+        <DialogFooter className="flex-wrap gap-2 border-t px-6 py-4">
+          <Button variant="ghost" onClick={onClose}>Cerrar</Button>
+          <Button variant="outline" onClick={descargarCsv}>
+            <Download className="mr-1 h-4 w-4" /> Descargar CSV
+          </Button>
+          <Button onClick={() => window.print()}>
+            <Printer className="mr-1 h-4 w-4" /> Imprimir o guardar PDF
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 
