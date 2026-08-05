@@ -87,6 +87,8 @@ export interface Doctor {
   schedule: DoctorSchedule;
   active: boolean;
   bio: string;
+  facebook: string | null;
+  instagram: string | null;
 }
 
 const HORARIO_POR_DEFECTO: DoctorSchedule = { days: [1, 2, 3, 4, 5], start: "09:00", end: "17:00" };
@@ -113,6 +115,8 @@ export const toDoctor = (r: Row<"doctors">): Doctor => ({
   schedule: toSchedule(r.schedule),
   active: r.active,
   bio: r.bio,
+  facebook: r.facebook,
+  instagram: r.instagram,
 });
 
 // ---------------------------------------------------------------------------
@@ -127,6 +131,10 @@ export interface Patient {
   email: string;
   birthDate: string | null;
   photo: string | null;
+  /** A quien avisar si le pasa algo. Lo ve el personal clinico. */
+  emergencyName: string | null;
+  emergencyPhone: string | null;
+  emergencyRelation: string | null;
 }
 
 export const toPatient = (r: Row<"patients">): Patient => ({
@@ -138,6 +146,9 @@ export const toPatient = (r: Row<"patients">): Patient => ({
   email: r.email,
   birthDate: r.birth_date,
   photo: r.photo,
+  emergencyName: r.emergency_name,
+  emergencyPhone: r.emergency_phone,
+  emergencyRelation: r.emergency_relation,
 });
 
 // ---------------------------------------------------------------------------
@@ -221,8 +232,82 @@ export const toInvoice = (r: Row<"invoices">): Invoice => ({
 });
 
 // ---------------------------------------------------------------------------
+// Archivo clinico
+// ---------------------------------------------------------------------------
+export type FileKind = Database["public"]["Enums"]["file_kind"];
+
+export const ETIQUETAS_TIPO_ARCHIVO: Record<FileKind, string> = {
+  estudio: "Estudio",
+  analisis: "Analisis",
+  receta: "Receta",
+  consentimiento: "Consentimiento",
+  otro: "Otro",
+};
+
+export interface PatientFile {
+  id: string;
+  clinicId: string;
+  patientId: string;
+  uploadedBy: string | null;
+  storagePath: string;
+  fileName: string;
+  mimeType: string;
+  sizeBytes: number;
+  kind: FileKind;
+  notes: string;
+  createdAt: string;
+}
+
+export const toPatientFile = (r: Row<"patient_files">): PatientFile => ({
+  id: r.id,
+  clinicId: r.clinic_id,
+  patientId: r.patient_id,
+  uploadedBy: r.uploaded_by,
+  storagePath: r.storage_path,
+  fileName: r.file_name,
+  mimeType: r.mime_type,
+  sizeBytes: Number(r.size_bytes),
+  kind: r.kind,
+  notes: r.notes,
+  createdAt: r.created_at,
+});
+
+// ---------------------------------------------------------------------------
+// Gasto
+// ---------------------------------------------------------------------------
+export interface Expense {
+  id: string;
+  clinicId: string;
+  /** null = gasto general de la clinica, no imputable a un medico */
+  doctorId: string | null;
+  concept: string;
+  amount: number;
+  date: string;
+  notes: string;
+  createdAt: string;
+}
+
+export const toExpense = (r: Row<"expenses">): Expense => ({
+  id: r.id,
+  clinicId: r.clinic_id,
+  doctorId: r.doctor_id,
+  concept: r.concept,
+  amount: Number(r.amount),
+  date: r.expense_date,
+  notes: r.notes,
+  createdAt: r.created_at,
+});
+
+// ---------------------------------------------------------------------------
 // Utilidades
 // ---------------------------------------------------------------------------
+/** "1536000" -> "1.5 MB". Para listar archivos sin abrumar. */
+export function formatearTamano(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
 /** Postgres devuelve `time` como "09:00:00"; la app usa "09:00". */
 export function hhmm(t: string): string {
   return t.slice(0, 5);

@@ -50,6 +50,8 @@ export interface NuevoDoctor {
   schedule: DoctorSchedule;
   bio?: string;
   active?: boolean;
+  facebook?: string | null;
+  instagram?: string | null;
 }
 
 export function useCreateDoctor() {
@@ -66,6 +68,8 @@ export function useCreateDoctor() {
           schedule: d.schedule as unknown as never,
           bio: d.bio ?? "",
           active: d.active ?? true,
+          facebook: d.facebook ?? null,
+          instagram: d.instagram ?? null,
         })
         .select()
         .single();
@@ -89,6 +93,8 @@ export function useUpdateDoctor() {
           ...(patch.schedule !== undefined ? { schedule: patch.schedule as unknown as never } : {}),
           ...(patch.bio !== undefined ? { bio: patch.bio } : {}),
           ...(patch.active !== undefined ? { active: patch.active } : {}),
+          ...(patch.facebook !== undefined ? { facebook: patch.facebook } : {}),
+          ...(patch.instagram !== undefined ? { instagram: patch.instagram } : {}),
         })
         .eq("id", id);
       lanzarSiError(error);

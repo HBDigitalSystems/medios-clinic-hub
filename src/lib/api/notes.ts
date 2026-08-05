@@ -26,6 +26,33 @@ export function useAppointmentNote(appointmentId: string | undefined) {
   });
 }
 
+/**
+ * Notas de varias citas de una vez, para pintar un historial completo.
+ *
+ * Una consulta por cita seria una cascada de peticiones al abrir la ficha
+ * de un paciente con muchas visitas.
+ *
+ * RLS sigue mandando: el paciente no recibe ninguna, aunque pregunte por
+ * las citas suyas.
+ */
+export function useNotasDeCitas(appointmentIds: string[]) {
+  const clave = [...appointmentIds].sort().join(",");
+  return useQuery({
+    queryKey: ["appointment-notes", clave] as const,
+    enabled: appointmentIds.length > 0,
+    queryFn: async (): Promise<Record<string, string>> => {
+      const { data, error } = await supabase
+        .from("appointment_notes")
+        .select("appointment_id, content")
+        .in("appointment_id", appointmentIds);
+      lanzarSiError(error);
+      const mapa: Record<string, string> = {};
+      (data ?? []).forEach((n) => { mapa[n.appointment_id] = n.content; });
+      return mapa;
+    },
+  });
+}
+
 /** Upsert: la fila de notas se crea la primera vez que el doctor escribe. */
 export function useSaveAppointmentNote() {
   const qc = useQueryClient();

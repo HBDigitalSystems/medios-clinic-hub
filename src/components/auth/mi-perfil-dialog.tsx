@@ -7,6 +7,7 @@ import { Textarea } from "@/components/ui/textarea";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription,
 } from "@/components/ui/dialog";
+import { Facebook, Instagram } from "lucide-react";
 import { ImageUpload } from "@/components/ui/image-upload";
 import { useUpdateDoctor } from "@/lib/api/doctors";
 import { useUpdatePatient } from "@/lib/api/patients";
@@ -23,10 +24,20 @@ export function MiPerfilDoctor({ doctor, onClose }: { doctor: Doctor; onClose: (
   const actualizar = useUpdateDoctor();
   const [photo, setPhoto] = useState<string | null>(doctor.photo || null);
   const [bio, setBio] = useState(doctor.bio);
+  const [facebook, setFacebook] = useState(doctor.facebook ?? "");
+  const [instagram, setInstagram] = useState(doctor.instagram ?? "");
 
   const guardar = async () => {
     try {
-      await actualizar.mutateAsync({ id: doctor.id, patch: { photo: photo ?? "", bio } });
+      await actualizar.mutateAsync({
+        id: doctor.id,
+        patch: {
+          photo: photo ?? "",
+          bio,
+          facebook: facebook.trim() || null,
+          instagram: instagram.trim() || null,
+        },
+      });
       toast.success("Perfil actualizado");
       onClose();
     } catch (e) {
@@ -61,6 +72,16 @@ export function MiPerfilDoctor({ doctor, onClose }: { doctor: Doctor; onClose: (
           <div>
             <Label>Bio</Label>
             <Textarea rows={3} value={bio} onChange={(e) => setBio(e.target.value)} />
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div>
+              <Label className="flex items-center gap-1.5"><Facebook className="h-3.5 w-3.5" /> Facebook</Label>
+              <Input value={facebook} onChange={(e) => setFacebook(e.target.value)} placeholder="tu usuario" />
+            </div>
+            <div>
+              <Label className="flex items-center gap-1.5"><Instagram className="h-3.5 w-3.5" /> Instagram</Label>
+              <Input value={instagram} onChange={(e) => setInstagram(e.target.value)} placeholder="tu usuario" />
+            </div>
           </div>
         </div>
         <DialogFooter>

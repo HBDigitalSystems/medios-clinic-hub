@@ -105,6 +105,9 @@ export function useUpdatePatient() {
           ...(patch.email !== undefined ? { email: patch.email } : {}),
           ...(patch.birthDate !== undefined ? { birth_date: patch.birthDate } : {}),
           ...(patch.photo !== undefined ? { photo: patch.photo } : {}),
+          ...(patch.emergencyName !== undefined ? { emergency_name: patch.emergencyName } : {}),
+          ...(patch.emergencyPhone !== undefined ? { emergency_phone: patch.emergencyPhone } : {}),
+          ...(patch.emergencyRelation !== undefined ? { emergency_relation: patch.emergencyRelation } : {}),
         })
         .eq("id", id);
       lanzarSiError(error);

@@ -4,6 +4,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { LogoClinica } from "@/components/logo-clinica";
+import { RedesDoctor } from "@/components/redes-doctor";
 import { useClinic } from "@/lib/api/clinic";
 import { useServices } from "@/lib/api/services";
 import { useActiveDoctors } from "@/lib/api/doctors";
@@ -131,25 +132,33 @@ function Landing() {
             {doctors.map((d) => {
               const sp = services.find((s) => s.id === d.serviceId);
               return (
-                <Link
-                  key={d.id}
-                  to="/booking"
-                  search={d.serviceId ? { especialidad: d.serviceId } : {}}
-                  className="group overflow-hidden rounded-2xl bg-card shadow-sm transition hover:shadow-md"
-                >
-                  {d.photo
-                    ? <img src={d.photo} alt={d.name} className="aspect-square w-full object-cover" />
-                    : <div className="grid aspect-square w-full place-items-center bg-primary/10 text-primary">
-                        <Stethoscope className="h-12 w-12" />
-                      </div>}
-                  <div className="p-4">
-                    <h3 className="font-semibold">{d.name}</h3>
-                    <p className="text-sm text-primary">{sp?.name}</p>
-                    <p className="mt-2 text-xs text-muted-foreground transition group-hover:text-primary">
-                      Ver disponibilidad →
-                    </p>
-                  </div>
-                </Link>
+                // Las redes van FUERA del Link: un <a> dentro de otro <a> es
+                // HTML invalido y el navegador rompe la anidacion
+                <div key={d.id} className="group overflow-hidden rounded-2xl bg-card shadow-sm transition hover:shadow-md">
+                  <Link
+                    to="/booking"
+                    search={d.serviceId ? { especialidad: d.serviceId } : {}}
+                    className="block"
+                  >
+                    {d.photo
+                      ? <img src={d.photo} alt={d.name} className="aspect-square w-full object-cover" />
+                      : <div className="grid aspect-square w-full place-items-center bg-primary/10 text-primary">
+                          <Stethoscope className="h-12 w-12" />
+                        </div>}
+                    <div className="p-4 pb-2">
+                      <h3 className="font-semibold">{d.name}</h3>
+                      <p className="text-sm text-primary">{sp?.name}</p>
+                      <p className="mt-2 text-xs text-muted-foreground transition group-hover:text-primary">
+                        Ver disponibilidad →
+                      </p>
+                    </div>
+                  </Link>
+                  {(d.facebook || d.instagram) && (
+                    <div className="px-4 pb-4">
+                      <RedesDoctor facebook={d.facebook} instagram={d.instagram} tamano="sm" />
+                    </div>
+                  )}
+                </div>
               );
             })}
           </div>

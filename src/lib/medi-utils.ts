@@ -39,7 +39,9 @@ export const doctorColor = (id: string) => {
   return colors[h];
 };
 
-export const formatMoney = (n: number) => `$${n.toLocaleString("es-MX")} MXN`;
+/** El signo va delante del simbolo: "−$1,500 MXN", no "$-1,500 MXN". */
+export const formatMoney = (n: number) =>
+  `${n < 0 ? "−" : ""}$${Math.abs(n).toLocaleString("es-MX")} MXN`;
 
 /**
  * Fecha YYYY-MM-DD en la zona horaria del usuario.

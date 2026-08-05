@@ -191,7 +191,9 @@ export type Database = {
           bio: string
           clinic_id: string
           created_at: string
+          facebook: string | null
           id: string
+          instagram: string | null
           name: string
           photo: string
           schedule: Json
@@ -204,7 +206,9 @@ export type Database = {
           bio?: string
           clinic_id: string
           created_at?: string
+          facebook?: string | null
           id?: string
+          instagram?: string | null
           name: string
           photo?: string
           schedule?: Json
@@ -217,7 +221,9 @@ export type Database = {
           bio?: string
           clinic_id?: string
           created_at?: string
+          facebook?: string | null
           id?: string
+          instagram?: string | null
           name?: string
           photo?: string
           schedule?: Json
@@ -238,6 +244,60 @@ export type Database = {
             columns: ["service_id"]
             isOneToOne: false
             referencedRelation: "services"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      expenses: {
+        Row: {
+          amount: number
+          clinic_id: string
+          concept: string
+          created_at: string
+          created_by: string | null
+          doctor_id: string | null
+          expense_date: string
+          id: string
+          notes: string
+          updated_at: string
+        }
+        Insert: {
+          amount: number
+          clinic_id: string
+          concept: string
+          created_at?: string
+          created_by?: string | null
+          doctor_id?: string | null
+          expense_date?: string
+          id?: string
+          notes?: string
+          updated_at?: string
+        }
+        Update: {
+          amount?: number
+          clinic_id?: string
+          concept?: string
+          created_at?: string
+          created_by?: string | null
+          doctor_id?: string | null
+          expense_date?: string
+          id?: string
+          notes?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "expenses_clinic_id_fkey"
+            columns: ["clinic_id"]
+            isOneToOne: false
+            referencedRelation: "clinics"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "expenses_doctor_id_fkey"
+            columns: ["doctor_id"]
+            isOneToOne: false
+            referencedRelation: "doctors"
             referencedColumns: ["id"]
           },
         ]
@@ -306,12 +366,72 @@ export type Database = {
           },
         ]
       }
+      patient_files: {
+        Row: {
+          clinic_id: string
+          created_at: string
+          file_name: string
+          id: string
+          kind: Database["public"]["Enums"]["file_kind"]
+          mime_type: string
+          notes: string
+          patient_id: string
+          size_bytes: number
+          storage_path: string
+          uploaded_by: string | null
+        }
+        Insert: {
+          clinic_id: string
+          created_at?: string
+          file_name: string
+          id?: string
+          kind?: Database["public"]["Enums"]["file_kind"]
+          mime_type?: string
+          notes?: string
+          patient_id: string
+          size_bytes?: number
+          storage_path: string
+          uploaded_by?: string | null
+        }
+        Update: {
+          clinic_id?: string
+          created_at?: string
+          file_name?: string
+          id?: string
+          kind?: Database["public"]["Enums"]["file_kind"]
+          mime_type?: string
+          notes?: string
+          patient_id?: string
+          size_bytes?: number
+          storage_path?: string
+          uploaded_by?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "patient_files_clinic_id_fkey"
+            columns: ["clinic_id"]
+            isOneToOne: false
+            referencedRelation: "clinics"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "patient_files_patient_id_fkey"
+            columns: ["patient_id"]
+            isOneToOne: false
+            referencedRelation: "patients"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       patients: {
         Row: {
           birth_date: string | null
           clinic_id: string
           created_at: string
           email: string
+          emergency_name: string | null
+          emergency_phone: string | null
+          emergency_relation: string | null
           id: string
           name: string
           phone: string
@@ -324,6 +444,9 @@ export type Database = {
           clinic_id: string
           created_at?: string
           email?: string
+          emergency_name?: string | null
+          emergency_phone?: string | null
+          emergency_relation?: string | null
           id?: string
           name: string
           phone?: string
@@ -336,6 +459,9 @@ export type Database = {
           clinic_id?: string
           created_at?: string
           email?: string
+          emergency_name?: string | null
+          emergency_phone?: string | null
+          emergency_relation?: string | null
           id?: string
           name?: string
           phone?: string
@@ -468,6 +594,10 @@ export type Database = {
         }[]
       }
       is_admin: { Args: never; Returns: boolean }
+      puede_ver_archivos_de: {
+        Args: { p_patient_id: string }
+        Returns: boolean
+      }
       reset_demo_data: { Args: never; Returns: string }
     }
     Enums: {
@@ -479,6 +609,7 @@ export type Database = {
         | "completed"
         | "cancelled"
         | "no_show"
+      file_kind: "estudio" | "analisis" | "receta" | "consentimiento" | "otro"
       invoice_status: "pending" | "paid" | "cancelled"
       payment_method: "efectivo" | "tarjeta" | "transferencia"
     }
@@ -617,6 +748,7 @@ export const Constants = {
         "cancelled",
         "no_show",
       ],
+      file_kind: ["estudio", "analisis", "receta", "consentimiento", "otro"],
       invoice_status: ["pending", "paid", "cancelled"],
       payment_method: ["efectivo", "tarjeta", "transferencia"],
     },
